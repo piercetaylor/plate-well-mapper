@@ -1,0 +1,31 @@
+sample_name,dilution_factor,notes
+HEK293_ctrl_1,1,
+HEK293_ctrl_2,1,
+HEK293_ctrl_3,1,
+HEK293_KO_1,1,
+HEK293_KO_2,1,
+HEK293_KO_3,1,
+HeLa_untreated_1,1,
+HeLa_untreated_2,1,
+HeLa_treated_1,2,drug treatment 24h
+HeLa_treated_2,2,drug treatment 24h
+HeLa_treated_3,2,drug treatment 24h
+MEF_WT_1,1,
+MEF_WT_2,1,
+MEF_KO_1,1,
+MEF_KO_2,1,
+Liver_lysate_1,5,tissue homogenate
+Liver_lysate_2,5,tissue homogenate
+Liver_lysate_3,5,tissue homogenate
+Kidney_lysate_1,5,tissue homogenate
+Kidney_lysate_2,5,tissue homogenate
+Jurkat_ctrl_1,1,
+Jurkat_ctrl_2,1,
+Jurkat_stim_1,1,PMA/ionomycin stim
+Jurkat_stim_2,1,PMA/ionomycin stim
+CHO_S1_1,2,
+CHO_S1_2,2,
+CHO_S2_1,2,
+293T_lysate_1,1,repeat of failed run
+293T_lysate_2,1,repeat of failed run
+IP_eluate_1,1,low yield expected
