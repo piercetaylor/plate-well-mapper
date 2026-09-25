@@ -108,13 +108,13 @@ def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plat
                 std_concs.append(lr.conc_ugml)
         elif lr.short_id not in seen_samples:
             suffix = f" (DF {lr.dilution_factor:g})" if lr.dilution_factor not in (None, 1) else ""
-            seen_samples[lr.short_id] = f"{lr.short_id} — {lr.label}{suffix}"
+            seen_samples[lr.short_id] = (f"{lr.short_id} — {lr.label}", suffix)
 
     std_line = ""
     if std_concs:
         std_concs_sorted = sorted(std_concs, reverse=True)
         conc_str = "/".join(str(int(v)) for v in std_concs_sorted)
-        std_line = f"Standards (STD<conc>): BSA {conc_str} µg/mL"
+        std_line = f"Standards: number in well = BSA µg/mL ({conc_str})"
         if has_blank:
             std_line += "; BLK = Blank"
 
@@ -145,7 +145,9 @@ def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plat
         row = idx % rows_per_col if rows_per_col else 0
         cx = x + col * col_w
         cy = ly - row * line_h
-        c.drawString(cx, cy, _truncate(entry, max_chars))
+        text, suffix = entry
+        # Truncate the name, never the dilution factor.
+        c.drawString(cx, cy, _truncate(text, max_chars - len(suffix)) + suffix)
 
 
 def write_pdf(rows: list[LayoutRow], path: str, experiment: str = "", date: str = "") -> int:

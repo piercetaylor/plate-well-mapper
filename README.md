@@ -44,7 +44,7 @@ it generates.
    Gen5 as CSV.
 5. `platemap read out/platemap_plates.xlsx plate1.csv plate2.csv`
    Fills the Reader sheets in a new workbook and writes a mapped CSV.
-6. `platemap notebook -o bca_analysis.ipynb`, then open and run it against
+6. `platemap notebook -o out/bca_analysis.ipynb`, then open and run it against
    the mapped CSV to fit the standard curve and get sample concentrations.
 
 ## Plate 1 layout (full mode)
