@@ -98,3 +98,60 @@ def test_notebook_writes_file(tmp_path):
     rc = main(["notebook", "-o", str(out_path)])
     assert rc == 0
     assert out_path.exists()
+
+
+def test_dilute_help_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["dilute", "-h"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage" in out.lower()
+
+
+def test_dilute_writes_files_and_prints_summary(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["dilute", samples_path, "-o", str(outdir), "--prefix", "demo"])
+    assert rc == 0
+
+    expected = [
+        "demo_samples_diluted.csv",
+        "demo_dilution.csv",
+        "demo_dilution.pdf",
+        "demo_layout.csv",
+        "demo_plates.xlsx",
+        "demo_platemap.pdf",
+        "demo_bca_analysis.ipynb",
+    ]
+    for name in expected:
+        assert (outdir / name).exists(), name
+
+    out = capsys.readouterr().out
+    assert "samples=2 factor=20 sample_ul=10 diluent_ul=190" in out
+    assert "dilution_plates=1" in out
+    assert "assay_plates=1" in out
+
+
+def test_dilute_warns_on_low_remaining_standard_volume(tmp_path, capsys):
+    # 105 samples -> ceil(105/26) = 5 assay plates -> need 125 uL/well, several
+    # standard wells only have 100 uL remaining after the serial dilution.
+    samples_path = _write_samples(tmp_path, n=105)
+    outdir = tmp_path / "out"
+    rc = main(["dilute", samples_path, "-o", str(outdir), "--prefix", "demo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "assay_plates=5" in out
+    assert "WARNING: STD1500" in out
+
+
+def test_dilute_layout_sheet_has_diluted_dilution_factor(tmp_path):
+    from platemap.excel import read_layout
+
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    main(["dilute", samples_path, "-o", str(outdir), "--prefix", "demo"])
+
+    rows = read_layout(outdir / "demo_plates.xlsx")
+    sample_row = next(r for r in rows if r.role == "sample")
+    assert sample_row.dilution_factor == 20.0

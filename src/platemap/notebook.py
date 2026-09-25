@@ -3,7 +3,7 @@
 import nbformat as nbf
 
 
-def build_notebook():
+def build_notebook(mapped_csv: str = "platemap_plates_mapped.csv", output_csv: str = "bca_results.csv"):
     """Build the analysis notebook (nbformat NotebookNode), outputs stripped."""
     nb = nbf.v4.new_notebook()
 
@@ -11,6 +11,8 @@ def build_notebook():
         "# BCA Assay Analysis\n\n"
         "Loads a mapped plate CSV (from `platemap read`), fits BSA standard curves per "
         "plate, quantifies sample concentrations, and exports a summary table.\n\n"
+        "Concentrations are multiplied by each sample's `dilution_factor` (this includes "
+        "any pre-dilution applied by `platemap dilute`, not just assay-time dilution).\n\n"
         "Edit the parameters cell below, then run all cells."
     )
 
@@ -30,9 +32,9 @@ def build_notebook():
     )
 
     params_code = nbf.v4.new_code_cell(
-        'MAPPED_CSV = "platemap_plates_mapped.csv"\n'
+        f"MAPPED_CSV = {mapped_csv!r}\n"
         'MODEL = "4pl"\n'
-        'OUTPUT_CSV = "bca_results.csv"'
+        f"OUTPUT_CSV = {output_csv!r}"
     )
     params_code.metadata["tags"] = ["parameters"]
 
@@ -111,8 +113,12 @@ def build_notebook():
     return nb
 
 
-def write_notebook(path: str) -> None:
+def write_notebook(
+    path: str,
+    mapped_csv: str = "platemap_plates_mapped.csv",
+    output_csv: str = "bca_results.csv",
+) -> None:
     """Build and write the analysis notebook to path."""
-    nb = build_notebook()
+    nb = build_notebook(mapped_csv=mapped_csv, output_csv=output_csv)
     with open(path, "w", encoding="utf-8") as fh:
         nbf.write(nb, fh)

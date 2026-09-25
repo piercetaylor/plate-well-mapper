@@ -34,7 +34,10 @@ it generates.
 ## Quickstart
 
 1. Write a sample CSV (`sample_name`, `dilution_factor`, `notes`). See
-   `examples/samples.csv`.
+   `examples/samples.csv`. If samples need pre-dilution before the assay,
+   run `platemap dilute samples.csv -o out --experiment "BCA run 1"`
+   instead of step 2 below; it writes a dilution plate map/protocol PDF
+   plus the normal layout outputs, built from the diluted samples.
 2. `platemap layout samples.csv -o out --experiment "BCA run 1"`
    Writes `out/platemap_layout.csv`, `out/platemap_plates.xlsx`, and
    `out/platemap_platemap.pdf`.

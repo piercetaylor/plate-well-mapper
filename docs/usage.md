@@ -5,7 +5,7 @@
 ### `platemap`
 
 ```
-usage: platemap [-h] [--version] {layout,read,notebook} ...
+usage: platemap [-h] [--version] {layout,read,dilute,notebook} ...
 ```
 
 - `-h`, `--help`: show help and exit.
@@ -76,14 +76,92 @@ Writes the filled workbook and `<workbook stem>_mapped.csv` next to the
 output workbook, then prints both paths and `missing=<N>` (wells with no
 absorbance value).
 
+### `platemap dilute SAMPLES [options]`
+
+Build 96-well pre-dilution plate map(s) from a sample CSV, then run the
+usual `layout` step on the *diluted* samples.
+
+Dilution plate 1 also prepares the BSA standard curve, mirroring wells
+A1-B6 of the assay plate: A1-A2 2000, A3-A4 1500, A5-A6 1000, A7-A8 750,
+A9-A10 500, A11-A12 250, B1-B2 125, B3-B4 25 (all duplicate, 200 µL
+final each), and B5-B6 the blank (200 µL diluent). Each standard well
+is prepared either from BSA stock (2000/1500/1000) or serially from the
+same-replicate well of the next-higher concentration (750 from 1500,
+500 from 1000, 250 from 500, 125 from 250, 25 from 125); the exact
+source well, source µL, diluent µL, and remaining µL for each well are
+in `dilution.STANDARD_PREP` and the dilution PDF/CSV. Samples start at
+B7 (row-major), so plate 1 holds up to 78 samples; any samples beyond
+that (and all of plates 2+) go on additional dilution plates with no
+standards, starting at A1.
+
+At 25 µL transferred per assay plate per standard well, each standard
+well needs at least `25 * <number of assay plates>` µL remaining after
+the serial dilution. If it doesn't, `platemap dilute` prints a
+`WARNING:` line (and the dilution PDF shows it) naming the well.
+
+```
+usage: platemap dilute [-h] [--factor FACTOR] [--final-volume FINAL_VOLUME]
+                        [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
+                        [--experiment EXPERIMENT] [--date DATE]
+                        SAMPLES
+```
+
+- `SAMPLES`: path to the sample CSV.
+- `--factor FACTOR`: dilution factor applied to every sample before the
+  BCA assay (default `20`, i.e. 1 part sample + 19 parts diluent).
+- `--final-volume FINAL_VOLUME`: total well volume in µL for the
+  dilution step (default `200`). Sample volume is `final / factor` and
+  diluent volume is the remainder. Errors if `FACTOR <= 1`, if
+  `FINAL_VOLUME <= 0`, if `FINAL_VOLUME > 300` (a standard 96-well plate
+  isn't modelled as deep-well), or if the resulting sample volume is
+  below 2 µL (raise `--final-volume`).
+- `-o OUTDIR`, `--outdir OUTDIR`, `--prefix PREFIX`, `--avoid-edges`,
+  `--experiment EXPERIMENT`, `--date DATE`: same as `platemap layout`.
+
+Writes, in order:
+
+1. `<prefix>_samples_diluted.csv` — the sample CSV with
+   `dilution_factor` multiplied by `FACTOR`.
+2. `<prefix>_dilution.csv` — one row per standard/blank well and one
+   per sample: `plate, well, role, short_id, label, conc_ugml, source,
+   source_ul, diluent_ul, final_ul, remaining_ul`.
+3. `<prefix>_dilution.pdf` — one page per dilution plate, with the
+   pipetting protocol (plate 1 includes the standard-prep table), a
+   plate map, and a legend.
+4. `<prefix>_layout.csv`, `<prefix>_plates.xlsx`, `<prefix>_platemap.pdf`
+   — the normal `layout` outputs, built from the *diluted* samples (so
+   the Layout sheet's `dilution_factor` already includes the
+   pre-dilution).
+5. `<prefix>_bca_analysis.ipynb` — the analysis notebook, with
+   `MAPPED_CSV` pre-set to `<prefix>_plates_mapped.csv` and `OUTPUT_CSV`
+   to `<prefix>_bca_results.csv`. Skipped with a note if the `notebook`
+   extra isn't installed.
+
+Then prints:
+
+```
+samples=<N> factor=<F> sample_ul=<S> diluent_ul=<D> dilution_plates=<K> assay_plates=<P>
+<path to each file written, in the order above>
+```
+
+Range logic: with the standard 25-2000 µg/mL BSA curve, a dilution
+factor `F` lets you read undiluted sample concentrations of roughly
+`25*F` to `2000*F` µg/mL (the curve's range, scaled back up by `F`). The
+default `F=20` covers about 0.5-40 mg/mL, which suits most cell lysates
+and tissue homogenates; dilute further (larger `--factor`) for very
+concentrated samples, or use a smaller factor (or skip `dilute`
+entirely) for dilute samples.
+
 ### `platemap notebook [options]`
 
 ```
-usage: platemap notebook [-h] [-o PATH]
+usage: platemap notebook [-h] [-o PATH] [--mapped-csv NAME]
 ```
 
 - `-o PATH`, `--out PATH`: output notebook path (default
   `bca_analysis.ipynb`).
+- `--mapped-csv NAME`: mapped CSV filename baked into the notebook's
+  `MAPPED_CSV` parameter (default `platemap_plates_mapped.csv`).
 
 Writes a Jupyter notebook for fitting the standard curve and quantifying
 samples from a mapped CSV.

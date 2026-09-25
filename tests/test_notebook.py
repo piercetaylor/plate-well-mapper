@@ -28,6 +28,13 @@ def test_write_notebook(tmp_path):
     assert nb.metadata["kernelspec"]["name"] == "python3"
 
 
+def test_build_notebook_params_use_given_mapped_csv():
+    nb = build_notebook(mapped_csv="demo_plates_mapped.csv", output_csv="demo_bca_results.csv")
+    param_cells = [c for c in nb.cells if c.metadata.get("tags") == ["parameters"]]
+    assert "demo_plates_mapped.csv" in param_cells[0].source
+    assert "demo_bca_results.csv" in param_cells[0].source
+
+
 def _four_pl(x, a, b, c, d):
     return d + (a - d) / (1 + (x / c) ** b)
 

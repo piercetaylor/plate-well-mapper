@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from platemap import __version__
-from platemap.samples import PlatemapError, read_samples
+from platemap.samples import PlatemapError, Sample, read_samples
 
 
 def _valid_date(value: str) -> str:
@@ -75,6 +75,34 @@ def _build_parser() -> argparse.ArgumentParser:
     read_p.add_argument("--wavelength", default=None, help="wavelength/block label to select within each reader file")
     read_p.add_argument("-o", "--out", default=None, metavar="OUT.xlsx", help="output workbook path (default: <workbook stem>_filled.xlsx)")
 
+    dilute_p = subparsers.add_parser(
+        "dilute",
+        help="build a pre-dilution plate plus the resulting sample layout",
+        description=(
+            "Build a 96-well pre-dilution plate map from a sample CSV, then build the "
+            "usual layout (CSV, workbook, PDF, notebook) from the diluted samples."
+        ),
+        epilog=(
+            "examples:\n"
+            "  platemap dilute samples.csv -o out --experiment \"BCA run 1\"\n"
+            "  platemap dilute samples.csv --factor 10 --final-volume 250\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    dilute_p.add_argument("samples", metavar="SAMPLES", help="path to the sample CSV file")
+    dilute_p.add_argument("--factor", type=float, default=20, help="dilution factor (default: 20)")
+    dilute_p.add_argument("--final-volume", type=float, default=200, help="final well volume in µL (default: 200)")
+    dilute_p.add_argument("-o", "--outdir", default=".", help="output directory (default: .)")
+    dilute_p.add_argument("--prefix", default="platemap", help="output filename prefix (default: platemap)")
+    dilute_p.add_argument("--avoid-edges", action="store_true", help="restrict the assay layout to B-G x 2-11")
+    dilute_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
+    dilute_p.add_argument(
+        "--date",
+        type=_valid_date,
+        default=dt.date.today().isoformat(),
+        help="experiment date, YYYY-MM-DD (default: today)",
+    )
+
     notebook_p = subparsers.add_parser(
         "notebook",
         help="write a Jupyter notebook for BCA standard-curve analysis",
@@ -83,28 +111,48 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     notebook_p.add_argument("-o", "--out", default="bca_analysis.ipynb", metavar="PATH", help="output notebook path (default: bca_analysis.ipynb)")
+    notebook_p.add_argument(
+        "--mapped-csv",
+        default="platemap_plates_mapped.csv",
+        metavar="NAME",
+        help="mapped CSV filename baked into the parameters cell (default: platemap_plates_mapped.csv)",
+    )
 
     return parser
 
 
-def _run_layout(args: argparse.Namespace) -> int:
+def _write_layout_outputs(
+    samples: list[Sample], outdir: Path, prefix: str, avoid_edges: bool, experiment: str, date: str
+) -> tuple[Path, Path, Path]:
+    """Build a layout from samples and write its CSV, workbook, and PDF; return the paths."""
     from platemap.excel import write_excel
-    from platemap.layout import build_layout, capacity, n_plates, write_layout_csv
+    from platemap.layout import build_layout, write_layout_csv
     from platemap.pdf import write_pdf
 
+    rows = build_layout(samples, avoid_edges=avoid_edges)
+
+    csv_path = outdir / f"{prefix}_layout.csv"
+    xlsx_path = outdir / f"{prefix}_plates.xlsx"
+    pdf_path = outdir / f"{prefix}_platemap.pdf"
+
+    write_layout_csv(rows, str(csv_path))
+    write_excel(rows, str(xlsx_path), experiment=experiment, date=date)
+    write_pdf(rows, str(pdf_path), experiment=experiment, date=date)
+
+    return csv_path, xlsx_path, pdf_path
+
+
+def _run_layout(args: argparse.Namespace) -> int:
+    from platemap.layout import capacity, n_plates
+
     samples = read_samples(args.samples)
-    rows = build_layout(samples, avoid_edges=args.avoid_edges)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = outdir / f"{args.prefix}_layout.csv"
-    xlsx_path = outdir / f"{args.prefix}_plates.xlsx"
-    pdf_path = outdir / f"{args.prefix}_platemap.pdf"
-
-    write_layout_csv(rows, str(csv_path))
-    write_excel(rows, str(xlsx_path), experiment=args.experiment, date=args.date)
-    write_pdf(rows, str(pdf_path), experiment=args.experiment, date=args.date)
+    csv_path, xlsx_path, pdf_path = _write_layout_outputs(
+        samples, outdir, args.prefix, args.avoid_edges, args.experiment, args.date
+    )
 
     n = len(samples)
     plates = n_plates(n, args.avoid_edges)
@@ -113,6 +161,80 @@ def _run_layout(args: argparse.Namespace) -> int:
     print(csv_path)
     print(xlsx_path)
     print(pdf_path)
+    return 0
+
+
+def _run_dilute(args: argparse.Namespace) -> int:
+    from platemap.dilution import (
+        apply_dilution,
+        build_dilution_layout,
+        dilution_plate_count,
+        make_plan,
+        standard_prep_warnings,
+        write_dilution_csv,
+        write_samples_csv,
+    )
+    from platemap.layout import n_plates
+    from platemap.pdf import write_dilution_pdf
+
+    samples = read_samples(args.samples)
+    plan = make_plan(factor=args.factor, final_volume_ul=args.final_volume)
+    diluted = apply_dilution(samples, plan.factor)
+    dilution_wells = build_dilution_layout(samples, plan)
+
+    n = len(samples)
+    assay_plates = n_plates(n, args.avoid_edges)
+
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    samples_csv_path = outdir / f"{args.prefix}_samples_diluted.csv"
+    dilution_csv_path = outdir / f"{args.prefix}_dilution.csv"
+    dilution_pdf_path = outdir / f"{args.prefix}_dilution.pdf"
+
+    write_samples_csv(diluted, str(samples_csv_path))
+    write_dilution_csv(dilution_wells, str(dilution_csv_path))
+    write_dilution_pdf(
+        dilution_wells,
+        plan,
+        str(dilution_pdf_path),
+        n_assay_plates=assay_plates,
+        experiment=args.experiment,
+        date=args.date,
+    )
+
+    layout_csv_path, xlsx_path, pdf_path = _write_layout_outputs(
+        diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date
+    )
+
+    notebook_path = outdir / f"{args.prefix}_bca_analysis.ipynb"
+    try:
+        from platemap.notebook import write_notebook
+
+        write_notebook(
+            str(notebook_path),
+            mapped_csv=f"{args.prefix}_plates_mapped.csv",
+            output_csv=f"{args.prefix}_bca_results.csv",
+        )
+    except ImportError:
+        print("note: notebook extras not installed, skipping analysis notebook")
+        notebook_path = None
+
+    dilution_plates = dilution_plate_count(n)
+    print(
+        f"samples={n} factor={plan.factor:g} sample_ul={plan.sample_volume_ul:g} "
+        f"diluent_ul={plan.diluent_volume_ul:g} dilution_plates={dilution_plates} assay_plates={assay_plates}"
+    )
+    for warning in standard_prep_warnings(assay_plates):
+        print(f"WARNING: {warning}")
+    print(samples_csv_path)
+    print(dilution_csv_path)
+    print(dilution_pdf_path)
+    print(layout_csv_path)
+    print(xlsx_path)
+    print(pdf_path)
+    if notebook_path is not None:
+        print(notebook_path)
     return 0
 
 
@@ -171,7 +293,7 @@ def _run_read(args: argparse.Namespace) -> int:
 def _run_notebook(args: argparse.Namespace) -> int:
     from platemap.notebook import write_notebook
 
-    write_notebook(args.out)
+    write_notebook(args.out, mapped_csv=args.mapped_csv)
     print(args.out)
     return 0
 
@@ -190,6 +312,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_layout(args)
         if args.command == "read":
             return _run_read(args)
+        if args.command == "dilute":
+            return _run_dilute(args)
         if args.command == "notebook":
             return _run_notebook(args)
     except PlatemapError as exc:
