@@ -10,3 +10,6 @@ __pycache__/
 *_mapped.csv
 bca_results*.csv
 *.ipynb
+
+# Local experiment data
+data/

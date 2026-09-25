@@ -5,6 +5,9 @@ import math
 from dataclasses import dataclass
 
 
+SAMPLE_NAME_ALIASES = ("sample_id", "sample", "name", "id")
+
+
 class PlatemapError(Exception):
     """Raised for user-facing errors in platemap."""
 
@@ -21,7 +24,14 @@ def read_samples(path: str) -> list[Sample]:
     with open(path, "r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         if reader.fieldnames is not None:
-            reader.fieldnames = [name.strip().lower() for name in reader.fieldnames]
+            names = [name.strip().lower() for name in reader.fieldnames]
+            if "sample_name" not in names:
+                # Accept common alternative headers for the sample column.
+                for alias in SAMPLE_NAME_ALIASES:
+                    if alias in names:
+                        names[names.index(alias)] = "sample_name"
+                        break
+            reader.fieldnames = names
 
         samples: list[Sample] = []
         seen: dict[str, int] = {}

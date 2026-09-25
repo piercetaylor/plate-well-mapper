@@ -94,7 +94,8 @@ Columns (header required, case-insensitive, whitespace-trimmed):
 
 - `sample_name` (required): unique name for each sample. Blank on a
   non-blank row is an error; a repeated name is an error, naming both
-  line numbers.
+  line numbers. Headers are case-insensitive, and `sample_id`, `sample`,
+  `name` or `id` are accepted in place of `sample_name`.
 - `dilution_factor` (optional): a positive number. Blank defaults to
   `1.0`. Non-numeric or `<= 0` is an error, naming the line and the bad
   value.

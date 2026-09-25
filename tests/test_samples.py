@@ -83,3 +83,9 @@ def test_trailing_commas_and_nonfinite_df(tmp_path):
         p.write_text(f"sample_name,dilution_factor\nAlpha,{bad}\n", encoding="utf-8")
         with pytest.raises(PlatemapError):
             read_samples(str(p))
+
+
+def test_sample_id_header_alias(tmp_path):
+    p = tmp_path / "s.csv"
+    p.write_text("Sample_ID\n9.21-B100-UI\n9.21-B100-I\n", encoding="utf-8")
+    assert [s.sample_name for s in read_samples(str(p))] == ["9.21-B100-UI", "9.21-B100-I"]
