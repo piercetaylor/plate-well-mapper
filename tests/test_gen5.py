@@ -156,6 +156,30 @@ def test_check_gen5_layout_sample_rank():
     assert errors == []
 
 
+def test_check_gen5_layout_sample_rank_is_by_short_id_not_well_order():
+    # A7 = S9 (well order first), B4 = S2 (well order second): rank must follow the
+    # S-number, not well order, so this is mode-independent (e.g. multichannel).
+    rows = [
+        _row("A7", "sample", "S9"),
+        _row("A8", "sample", "S9"),
+        _row("A9", "sample", "S9"),
+        _row("B4", "sample", "S2"),
+        _row("B5", "sample", "S2"),
+        _row("B6", "sample", "S2"),
+    ]
+    layout = {
+        # Rank by S-number: S2 -> SPL1, S9 -> SPL2 (not well order, which would be reversed).
+        "A7": ("SPL2", ""),
+        "A8": ("SPL2", ""),
+        "A9": ("SPL2", ""),
+        "B4": ("SPL1", ""),
+        "B5": ("SPL1", ""),
+        "B6": ("SPL1", ""),
+    }
+    errors, warnings = check_gen5_layout(rows, layout)
+    assert errors == []
+
+
 def test_check_gen5_layout_missing_in_gen5_is_error():
     rows = [_row("A1", "standard", "STD2000", 2000.0)]
     layout = {}

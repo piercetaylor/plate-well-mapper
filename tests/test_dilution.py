@@ -4,6 +4,7 @@ import pytest
 
 from platemap.dilution import (
     PLATE1_SAMPLE_CAPACITY,
+    PLATE1_SAMPLE_CAPACITY_MC,
     apply_dilution,
     build_dilution_layout,
     dilution_plate_count,
@@ -11,6 +12,7 @@ from platemap.dilution import (
     standard_prep_warnings,
     standard_remaining_ul,
     stock_volume_ul,
+    transfer_map,
     write_dilution_csv,
     write_samples_csv,
 )
@@ -214,6 +216,73 @@ def test_write_dilution_pdf_page_count_two_plates(tmp_path):
     path = tmp_path / "dilution.pdf"
     n_pages = write_dilution_pdf(wells, plan, str(path), n_assay_plates=4)
     assert n_pages == 2
+
+
+def test_multichannel_plate1_capacity_is_72():
+    assert PLATE1_SAMPLE_CAPACITY_MC == 72
+
+
+def test_multichannel_dilution_plate_count():
+    assert dilution_plate_count(72, multichannel=True) == 1
+    assert dilution_plate_count(73, multichannel=True) == 2
+    assert dilution_plate_count(72 + 96, multichannel=True) == 2
+    assert dilution_plate_count(72 + 96 + 1, multichannel=True) == 3
+
+
+def test_multichannel_build_dilution_layout_60_samples():
+    samples = _samples(60)
+    plan = make_plan()
+    wells = build_dilution_layout(samples, plan, multichannel=True)
+    by_well = {w.well: w for w in wells}
+
+    assert by_well["A1"].role == "standard" and by_well["A1"].conc_ugml == 2000.0
+    assert by_well["H1"].conc_ugml == 25.0
+    assert by_well["A2"].role == "standard" and by_well["A2"].conc_ugml == 2000.0
+    for row_letter in "ABCDEFGH":
+        assert by_well[f"{row_letter}3"].role == "blank"
+
+    assert by_well["A4"].short_id == "S1"
+    assert by_well["A5"].short_id == "S9"
+
+    sample_wells = [w for w in wells if w.role == "sample"]
+    assert {w.plate for w in sample_wells} == {1}
+    used_cols = {int(w.well[1:]) for w in sample_wells}
+    assert used_cols == set(range(4, 12))  # 7 full cols (4-10) + partial col 11
+
+
+def test_multichannel_source_tracks_same_column():
+    samples = _samples(1)
+    plan = make_plan()
+    wells = build_dilution_layout(samples, plan, multichannel=True)
+    by_well = {w.well: w for w in wells}
+
+    assert by_well["D1"].source == "B1"  # 750 from 1500, same column
+    assert by_well["D2"].source == "B2"
+    assert by_well["A1"].source == "BSA stock"
+    assert by_well["A3"].source == "diluent"
+
+
+def test_multichannel_short_id_matches_build_layout_short_id():
+    from platemap.layout import build_layout
+
+    samples = _samples(60)
+    plan = make_plan()
+    dilution_wells = build_dilution_layout(samples, plan, multichannel=True)
+    dilution_ids = {w.label: w.short_id for w in dilution_wells if w.role == "sample"}
+
+    layout_rows = build_layout(samples, multichannel=True)
+    layout_ids = {r.sample_name: r.short_id for r in layout_rows if r.role == "sample"}
+
+    assert dilution_ids == layout_ids
+
+
+def test_transfer_map_plate2_is_dil_cols_7_8_9():
+    entries = transfer_map(60)
+    plate2_sample_entries = [e for e in entries if e[0] == 2 and e[4].startswith("S")]
+    dil_cols = [e[2] for e in plate2_sample_entries]
+    assert dil_cols == [7, 8, 9]
+    for e in plate2_sample_entries:
+        assert e[1] == 1  # all still on dilution plate 1
 
 
 def test_write_dilution_pdf_with_low_remaining_warnings(tmp_path):

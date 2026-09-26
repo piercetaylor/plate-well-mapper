@@ -97,6 +97,22 @@ highest sample / F < 2000 µg/mL and your lowest sample / F > 25 µg/mL.
 The command prints a warning if a standard well cannot supply 25 µL to
 every assay plate (5 or more assay plates at the default volumes).
 
+## Multichannel mode
+
+Pass `--multichannel` to `platemap layout` or `platemap dilute` for an
+8-channel, column-wise layout instead of the default row-wise one:
+standards in columns 1-2, blank in column 3, samples in columns 4-12,
+so every dilution-to-assay transfer is a whole-column 8-channel
+transfer (not compatible with `--avoid-edges`). See `docs/usage.md` for
+the full layout diagrams and the `transfer_map` used by the PDFs.
+
+## Auto-generated protocol
+
+`platemap layout` and `platemap dilute` also write `<prefix>_protocol.md`
+and `<prefix>_protocol.pdf`: a full run protocol (materials, prep
+steps, plating steps, WR volumes, analysis commands, QC checks)
+computed from your actual sample count and layout. See `docs/usage.md`.
+
 ## Plate 1 layout (full mode)
 
 Rows A and B hold the BSA standard curve in duplicate, high to low

@@ -304,10 +304,26 @@ def check_gen5_layout(
         (row for row in our_wells.values() if row.role == "sample"),
         key=lambda row: (ROWS_FULL.index(row.well[0]), int(row.well[1:])),
     )
-    sample_rank: dict[str, int] = {}
+    first_well_order: dict[str, int] = {}
     for row in sample_rows:
-        if row.short_id not in sample_rank:
-            sample_rank[row.short_id] = len(sample_rank) + 1
+        if row.short_id not in first_well_order:
+            first_well_order[row.short_id] = len(first_well_order)
+
+    def _short_id_num(short_id: str):
+        m = re.search(r"(\d+)", short_id)
+        return int(m.group(1)) if m else None
+
+    # Rank sample groups by their S-number (mode-independent), falling back to
+    # well order for any non-numeric short_id.
+    unique_ids = sorted(
+        first_well_order,
+        key=lambda sid: (
+            _short_id_num(sid) is None,
+            _short_id_num(sid) if _short_id_num(sid) is not None else 0,
+            first_well_order[sid],
+        ),
+    )
+    sample_rank: dict[str, int] = {sid: i + 1 for i, sid in enumerate(unique_ids)}
 
     all_wells = [f"{r}{c}" for r in ROWS_FULL for c in COLS_FULL]
 

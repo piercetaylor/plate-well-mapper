@@ -47,6 +47,11 @@ def _build_parser() -> argparse.ArgumentParser:
     layout_p.add_argument("-o", "--outdir", default=".", help="output directory (default: .)")
     layout_p.add_argument("--prefix", default="platemap", help="output filename prefix (default: platemap)")
     layout_p.add_argument("--avoid-edges", action="store_true", help="restrict layout to B-G x 2-11")
+    layout_p.add_argument(
+        "--multichannel",
+        action="store_true",
+        help="8-channel column-wise layout (standards col 1-2, blank col 3, samples cols 4-12)",
+    )
     layout_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     layout_p.add_argument(
         "--date",
@@ -97,6 +102,11 @@ def _build_parser() -> argparse.ArgumentParser:
     dilute_p.add_argument("-o", "--outdir", default=".", help="output directory (default: .)")
     dilute_p.add_argument("--prefix", default="platemap", help="output filename prefix (default: platemap)")
     dilute_p.add_argument("--avoid-edges", action="store_true", help="restrict the assay layout to B-G x 2-11")
+    dilute_p.add_argument(
+        "--multichannel",
+        action="store_true",
+        help="8-channel column-wise layout for both dilution and assay plates",
+    )
     dilute_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     dilute_p.add_argument(
         "--date",
@@ -149,14 +159,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _write_layout_outputs(
-    samples: list[Sample], outdir: Path, prefix: str, avoid_edges: bool, experiment: str, date: str
-) -> tuple[Path, Path, Path]:
-    """Build a layout from samples and write its CSV, workbook, and PDF; return the paths."""
+    samples: list[Sample],
+    outdir: Path,
+    prefix: str,
+    avoid_edges: bool,
+    experiment: str,
+    date: str,
+    multichannel: bool = False,
+    transfer_lines: dict[int, list[str]] | None = None,
+) -> tuple[Path, Path, Path, list]:
+    """Build a layout from samples and write its CSV, workbook, and PDF; return the paths + rows."""
     from platemap.excel import write_excel
     from platemap.layout import build_layout, write_layout_csv
     from platemap.pdf import write_pdf
 
-    rows = build_layout(samples, avoid_edges=avoid_edges)
+    rows = build_layout(samples, avoid_edges=avoid_edges, multichannel=multichannel)
 
     csv_path = outdir / f"{prefix}_layout.csv"
     xlsx_path = outdir / f"{prefix}_plates.xlsx"
@@ -164,30 +181,52 @@ def _write_layout_outputs(
 
     write_layout_csv(rows, str(csv_path))
     write_excel(rows, str(xlsx_path), experiment=experiment, date=date)
-    write_pdf(rows, str(pdf_path), experiment=experiment, date=date)
+    write_pdf(rows, str(pdf_path), experiment=experiment, date=date, transfer_lines=transfer_lines)
 
-    return csv_path, xlsx_path, pdf_path
+    return csv_path, xlsx_path, pdf_path, rows
 
 
 def _run_layout(args: argparse.Namespace) -> int:
     from platemap.layout import capacity, n_plates
+    from platemap.protocol import build_protocol, write_protocol_md, write_protocol_pdf
 
     samples = read_samples(args.samples)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    csv_path, xlsx_path, pdf_path = _write_layout_outputs(
-        samples, outdir, args.prefix, args.avoid_edges, args.experiment, args.date
+    csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
+        samples, outdir, args.prefix, args.avoid_edges, args.experiment, args.date, args.multichannel
     )
 
     n = len(samples)
-    plates = n_plates(n, args.avoid_edges)
-    cap = capacity(args.avoid_edges)
+    plates = n_plates(n, args.avoid_edges, args.multichannel)
+    cap = capacity(args.avoid_edges, args.multichannel)
     print(f"samples={n} plates={plates} capacity={cap}")
     print(csv_path)
     print(xlsx_path)
     print(pdf_path)
+
+    protocol_md_path = outdir / f"{args.prefix}_protocol.md"
+    protocol_pdf_path = outdir / f"{args.prefix}_protocol.pdf"
+    doc = build_protocol(
+        experiment=args.experiment,
+        date=args.date,
+        samples=samples,
+        layout_rows=rows,
+        avoid_edges=args.avoid_edges,
+        multichannel=args.multichannel,
+        n_assay_plates=plates,
+        file_names={
+            "plate_map_pdf": pdf_path.name,
+            "workbook": xlsx_path.name,
+            "prefix": args.prefix,
+        },
+    )
+    write_protocol_md(doc, str(protocol_md_path))
+    write_protocol_pdf(doc, str(protocol_pdf_path))
+    print(protocol_md_path)
+    print(protocol_pdf_path)
     return 0
 
 
@@ -198,19 +237,21 @@ def _run_dilute(args: argparse.Namespace) -> int:
         dilution_plate_count,
         make_plan,
         standard_prep_warnings,
+        transfer_map,
         write_dilution_csv,
         write_samples_csv,
     )
     from platemap.layout import n_plates
     from platemap.pdf import write_dilution_pdf
+    from platemap.protocol import build_protocol, write_protocol_md, write_protocol_pdf
 
     samples = read_samples(args.samples)
     plan = make_plan(factor=args.factor, final_volume_ul=args.final_volume)
     diluted = apply_dilution(samples, plan.factor)
-    dilution_wells = build_dilution_layout(samples, plan)
+    dilution_wells = build_dilution_layout(samples, plan, multichannel=args.multichannel)
 
     n = len(samples)
-    assay_plates = n_plates(n, args.avoid_edges)
+    assay_plates = n_plates(n, args.avoid_edges, args.multichannel)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -228,10 +269,24 @@ def _run_dilute(args: argparse.Namespace) -> int:
         n_assay_plates=assay_plates,
         experiment=args.experiment,
         date=args.date,
+        multichannel=args.multichannel,
+        n_samples=n,
     )
 
-    layout_csv_path, xlsx_path, pdf_path = _write_layout_outputs(
-        diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date
+    transfer_lines = None
+    if args.multichannel:
+        transfer_lines = {}
+        for assay_plate, dplate, dcol, acols, contents in transfer_map(n):
+            if not contents.startswith("S"):
+                continue
+            acol_str = ",".join(str(a) for a in acols)
+            transfer_lines.setdefault(assay_plate, []).append(
+                f"Multichannel: dil col {dcol} -> cols {acol_str}"
+            )
+
+    layout_csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
+        diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date,
+        args.multichannel, transfer_lines,
     )
 
     notebook_path = outdir / f"{args.prefix}_bca_analysis.ipynb"
@@ -247,7 +302,7 @@ def _run_dilute(args: argparse.Namespace) -> int:
         print("note: notebook extras not installed, skipping analysis notebook")
         notebook_path = None
 
-    dilution_plates = dilution_plate_count(n)
+    dilution_plates = dilution_plate_count(n, args.multichannel)
     print(
         f"samples={n} factor={plan.factor:g} sample_ul={plan.sample_volume_ul:g} "
         f"diluent_ul={plan.diluent_volume_ul:g} dilution_plates={dilution_plates} assay_plates={assay_plates}"
@@ -262,6 +317,32 @@ def _run_dilute(args: argparse.Namespace) -> int:
     print(pdf_path)
     if notebook_path is not None:
         print(notebook_path)
+
+    protocol_md_path = outdir / f"{args.prefix}_protocol.md"
+    protocol_pdf_path = outdir / f"{args.prefix}_protocol.pdf"
+    doc = build_protocol(
+        experiment=args.experiment,
+        date=args.date,
+        samples=samples,
+        layout_rows=rows,
+        avoid_edges=args.avoid_edges,
+        multichannel=args.multichannel,
+        plan=plan,
+        dilution_wells=dilution_wells,
+        n_assay_plates=assay_plates,
+        standards_warnings=standard_prep_warnings(assay_plates),
+        file_names={
+            "dilution_pdf": dilution_pdf_path.name,
+            "plate_map_pdf": pdf_path.name,
+            "workbook": xlsx_path.name,
+            "notebook": notebook_path.name if notebook_path is not None else "",
+            "prefix": args.prefix,
+        },
+    )
+    write_protocol_md(doc, str(protocol_md_path))
+    write_protocol_pdf(doc, str(protocol_pdf_path))
+    print(protocol_md_path)
+    print(protocol_pdf_path)
     return 0
 
 

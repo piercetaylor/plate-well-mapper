@@ -32,19 +32,26 @@ usage: platemap layout [-h] [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
 - `--prefix PREFIX`: output filename prefix (default `platemap`).
 - `--avoid-edges`: restrict wells to rows B-G, columns 2-11 (60 wells)
   instead of the full 96-well plate.
+- `--multichannel`: 8-channel column-wise layout instead of the default
+  row-wise layout (see "Multichannel mode" below). Errors if combined
+  with `--avoid-edges`.
 - `--experiment EXPERIMENT`: experiment name, recorded on the Info sheet
   and the PDF header.
 - `--date DATE`: experiment date, `YYYY-MM-DD` (default: today). Rejected
   if not a valid ISO date.
 
-Writes `OUTDIR/<prefix>_layout.csv`, `OUTDIR/<prefix>_plates.xlsx`, and
-`OUTDIR/<prefix>_platemap.pdf`, then prints:
+Writes `OUTDIR/<prefix>_layout.csv`, `OUTDIR/<prefix>_plates.xlsx`,
+`OUTDIR/<prefix>_platemap.pdf`, and `OUTDIR/<prefix>_protocol.md` /
+`OUTDIR/<prefix>_protocol.pdf` (an auto-generated run protocol, see
+"Auto-generated protocol" below), then prints:
 
 ```
 samples=<N> plates=<P> capacity=<C>
 <path to layout csv>
 <path to xlsx>
 <path to pdf>
+<path to protocol md>
+<path to protocol pdf>
 ```
 
 ### `platemap read WORKBOOK READER [READER ...] [options]`
@@ -124,6 +131,7 @@ the serial dilution. If it doesn't, `platemap dilute` prints a
 ```
 usage: platemap dilute [-h] [--factor FACTOR] [--final-volume FINAL_VOLUME]
                         [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
+                        [--multichannel]
                         [--experiment EXPERIMENT] [--date DATE]
                         SAMPLES
 ```
@@ -139,6 +147,9 @@ usage: platemap dilute [-h] [--factor FACTOR] [--final-volume FINAL_VOLUME]
   below 2 µL (raise `--final-volume`).
 - `-o OUTDIR`, `--outdir OUTDIR`, `--prefix PREFIX`, `--avoid-edges`,
   `--experiment EXPERIMENT`, `--date DATE`: same as `platemap layout`.
+- `--multichannel`: 8-channel column-wise layout for both the dilution
+  and assay plates (see "Multichannel mode" below). Errors if combined
+  with `--avoid-edges`.
 
 Writes, in order:
 
@@ -158,6 +169,8 @@ Writes, in order:
    `MAPPED_CSV` pre-set to `<prefix>_plates_mapped.csv` and `OUTPUT_CSV`
    to `<prefix>_bca_results.csv`. Skipped with a note if the `notebook`
    extra isn't installed.
+6. `<prefix>_protocol.md`, `<prefix>_protocol.pdf` — the auto-generated
+   run protocol (see "Auto-generated protocol" below).
 
 Then prints:
 
@@ -173,6 +186,78 @@ default `F=20` covers about 0.5-40 mg/mL, which suits most cell lysates
 and tissue homogenates; dilute further (larger `--factor`) for very
 concentrated samples, or use a smaller factor (or skip `dilute`
 entirely) for dilute samples.
+
+### Multichannel mode
+
+`--multichannel` (on `platemap layout` and `platemap dilute`) switches
+from the default row-wise triplicate layout to an 8-channel,
+column-wise layout: every dilution-plate-to-assay-plate transfer is a
+whole-column, 8-channel pipette transfer. Not compatible with
+`--avoid-edges`. Capacity is 24 samples/assay plate (vs. 26 row-wise).
+
+Dilution plate 1 (column-wise): column 1 = standards replicate 1,
+column 2 = standards replicate 2 (rows A-H = 2000/1500/1000/750/500/
+250/125/25 µg/mL, same stock/serial prep scheme as row-wise, each
+replicate column sourced from itself), column 3 = blank (200 µL
+diluent, A3-H3), columns 4-12 = samples, one well each, column-major
+(A4, B4, ... H4, A5, ...). Plate 1 holds 72 samples; further dilution
+plates use all 12 columns (96 samples each, no standards):
+
+```
+      1     2     3     4     5     6    ...   12
+   +-----+-----+-----+-----+-----+-----+     +-----+
+ A |2000 |2000 | BLK | S1  | S9  | S17 | ... |     |
+ B |1500 |1500 | BLK | S2  | S10 | S18 | ... |     |
+ C |1000 |1000 | BLK | S3  | S11 | S19 | ... |     |
+ D | 750 | 750 | BLK | S4  | S12 | S20 | ... |     |
+ E | 500 | 500 | BLK | S5  | S13 | S21 | ... |     |
+ F | 250 | 250 | BLK | S6  | S14 | S22 | ... |     |
+ G | 125 | 125 | BLK | S7  | S15 | S23 | ... |     |
+ H |  25 |  25 | BLK | S8  | S16 | S24 | ... |     |
+   +-----+-----+-----+-----+-----+-----+     +-----+
+```
+
+Assay plates (column-wise, 24 samples/plate): column 1 = standards
+replicate 1 (from dilution column 1), column 2 = standards replicate 2
+(dilution column 2), column 3 = blank x8 (dilution column 3); columns
+4-6, 7-9, 10-12 = three 8-sample dilution columns, each in triplicate
+(row `r` of a dilution column -> row `r` in all three of its assay
+columns). Assay plate `p` takes the next three 8-sample dilution
+columns in order (e.g. plate 2 = dilution columns 4, 5, 6 if plate 1
+used columns 1-3 of its samples); the last dilution column on a run may
+be partly filled, leaving matching wells empty on both plates. Sample
+numbering (`S#`) is global, in input order, and is identical between
+the dilution plate and the assay layout:
+
+```
+      1     2     3     4     5     6     7     8     9    10    11    12
+   +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+ A |2000 |2000 | BLK | S1  | S1  | S1  | S9  | S9  | S9  | S17 | S17 | S17 |
+ B |1500 |1500 | BLK | S2  | S2  | S2  | S10 | S10 | S10 | S18 | S18 | S18 |
+ ...
+```
+
+`platemap dilute --multichannel` computes a `transfer_map` (assay
+plate, dilution plate, dilution column, assay columns, contents) used
+by the dilution PDF (protocol steps + a transfer table) and the assay
+plate map PDF (one "Multichannel: dil col X -> cols a,b,c" line per
+plate).
+
+### Auto-generated protocol
+
+Both `platemap layout` and `platemap dilute` automatically write
+`<prefix>_protocol.md` and `<prefix>_protocol.pdf`: a run-specific
+protocol document computed from the actual samples/layout (no
+hard-coded counts), covering: an overview table (samples, replicates,
+assay plates with S-number ranges, wells used, layout mode, dilution
+factor/volumes, working range, output file names); materials; steps to
+take before starting; the dilution plate protocol + standards-prep
+table (dilute runs only); Working Reagent volume (wells used x 200 µL,
+10% excess, Reagent A:B at 50:1); plating steps (row-wise per-well
+instructions, or numbered column transfers from `transfer_map` in
+multichannel mode); incubation/reading; the exact `platemap read` /
+`platemap analyze` commands for this run; QC checks; generic buffer-
+compatibility notes; and a record table with one row per assay plate.
 
 ### `platemap notebook [options]`
 

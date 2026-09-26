@@ -115,7 +115,13 @@ def _draw_well_grid(
     return cell_w, cell_h, radius
 
 
-def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plate: int, plate_rows: list[LayoutRow]) -> None:
+def _draw_plate(
+    c: canvas.Canvas,
+    rects: tuple[float, float, float, float],
+    plate: int,
+    plate_rows: list[LayoutRow],
+    transfer_lines: list[str] | None = None,
+) -> None:
     x, y, w, h = rects
     grid_h = h * 0.62
     legend_top = y + h - grid_h - 0.05 * inch
@@ -162,12 +168,13 @@ def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plat
             std_line += "; BLK = Blank"
 
     sample_entries = list(seen_samples.values())
+    transfer_lines = transfer_lines or []
 
     # Shrink font/columns until everything fits in the available legend height.
     font_size, line_h, n_cols = 6.0, 7.2, 2
     for candidate_font in (6.0, 5.5, 5.0, 4.5, 4.0):
         candidate_line_h = candidate_font + 1.4
-        std_rows = 1 if std_line else 0
+        std_rows = (1 if std_line else 0) + len(transfer_lines)
         rows_needed = std_rows + math.ceil(len(sample_entries) / n_cols) if sample_entries else std_rows
         if rows_needed * candidate_line_h <= legend_available_h or candidate_font == 4.0:
             font_size, line_h = candidate_font, candidate_line_h
@@ -179,6 +186,9 @@ def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plat
     c.setFont("Helvetica", font_size)
     if std_line:
         c.drawString(x, ly, _truncate(std_line, int(w / (font_size * 0.5))))
+        ly -= line_h
+    for line in transfer_lines:
+        c.drawString(x, ly, _truncate(line, int(w / (font_size * 0.5))))
         ly -= line_h
 
     col_w = w / n_cols
@@ -193,10 +203,17 @@ def _draw_plate(c: canvas.Canvas, rects: tuple[float, float, float, float], plat
         c.drawString(cx, cy, _truncate(text, max_chars - len(suffix)) + suffix)
 
 
-def write_pdf(rows: list[LayoutRow], path: str, experiment: str = "", date: str = "") -> int:
+def write_pdf(
+    rows: list[LayoutRow],
+    path: str,
+    experiment: str = "",
+    date: str = "",
+    transfer_lines: dict[int, list[str]] | None = None,
+) -> int:
     """Write a plate map PDF (US Letter, 2x2 plates/page) and return the page count."""
     plates = sorted({row.plate for row in rows})
     n_pages = math.ceil(len(plates) / 4) if plates else 0
+    transfer_lines = transfer_lines or {}
 
     c = canvas.Canvas(path, pagesize=letter)
     for page in range(n_pages):
@@ -207,7 +224,7 @@ def write_pdf(rows: list[LayoutRow], path: str, experiment: str = "", date: str 
         rects = _panel_rects()
         for plate, rect in zip(page_plates, rects):
             plate_rows = [r for r in rows if r.plate == plate]
-            _draw_plate(c, rect, plate, plate_rows)
+            _draw_plate(c, rect, plate, plate_rows, transfer_lines.get(plate))
 
         c.showPage()
 
@@ -307,6 +324,40 @@ def _draw_standards_table(
     return (len(rows) + 1) * line_h
 
 
+def _draw_transfer_table(
+    c: canvas.Canvas,
+    transfers: list[tuple[int, int, int, tuple[int, ...], str]],
+    x: float,
+    top: float,
+    w: float,
+    font_size: float = 5.5,
+) -> float:
+    """Draw a (assay plate, dilution column -> assay columns, contents) transfer table."""
+    line_h = font_size + 1.6
+    headers = ("Assay plate", "Dil col", "-> Assay cols", "Contents")
+    fracs = (0.14, 0.10, 0.20, 0.20)
+    widths = [w * f for f in fracs]
+
+    c.setFont("Helvetica-Bold", font_size)
+    hx = x
+    for label, cw in zip(headers, widths):
+        c.drawString(hx, top, label)
+        hx += cw
+
+    c.setFont("Helvetica", font_size)
+    y = top - line_h
+    for assay_plate, _dplate, dcol, acols, contents in transfers:
+        acol_str = ",".join(str(a) for a in acols)
+        values = (f"Plate {assay_plate}", str(dcol), acol_str, contents)
+        hx = x
+        for val, cw in zip(values, widths):
+            c.drawString(hx, y, val)
+            hx += cw
+        y -= line_h
+
+    return (len(transfers) + 1) * line_h
+
+
 def write_dilution_pdf(
     wells: list[DilutionWell],
     plan: DilutionPlan,
@@ -314,11 +365,17 @@ def write_dilution_pdf(
     n_assay_plates: int = 1,
     experiment: str = "",
     date: str = "",
+    multichannel: bool = False,
+    n_samples: int = 0,
 ) -> int:
     """Write a dilution-plate protocol + map PDF, one plate per page, and return the page count."""
+    from platemap.dilution import transfer_map
+
     plates = sorted({w.plate for w in wells})
     n_pages = len(plates)
     content_w = PAGE_W - 2 * MARGIN
+
+    all_transfers = transfer_map(n_samples) if multichannel else []
 
     c = canvas.Canvas(path, pagesize=letter)
     for plate in plates:
@@ -343,7 +400,66 @@ def write_dilution_pdf(
         cursor -= 15
 
         warnings: list[str] = []
-        if standard_wells:
+        if multichannel:
+            plate_transfers = [t for t in all_transfers if t[1] == plate and t[4].startswith("S")]
+            if standard_wells:
+                warnings = standard_prep_warnings(n_assay_plates)
+                stock_concs = [c for c in STANDARD_PREP_ORDER if STANDARD_PREP[c][0] == STOCK]
+                serial_concs = [c for c in STANDARD_PREP_ORDER if c not in stock_concs]
+                stock_list = ", ".join(str(c) for c in stock_concs)
+                serial_list = ", ".join(str(c) for c in serial_concs)
+                steps = [
+                    f'1) Label a clear 96-well plate "Dilution {plate}" (also the standard-prep plate).',
+                    (
+                        f"2) Add diluent to sample columns 4-12 ({diluent_ul:g} µL/well) and "
+                        "200 µL diluent to blank column 3 (A3-H3); standard volumes vary, see "
+                        "the table below."
+                    ),
+                    (
+                        f"3) Make the standards in this order: {stock_list} µg/mL from BSA stock; "
+                        f"then {serial_list} µg/mL serially, each from the same column, same-row "
+                        "well of the previous concentration (see table for source wells/volumes). "
+                        "Mix each source well 10x before drawing from it."
+                    ),
+                    (
+                        f"4) Add {sample_ul:g} µL of each sample to its well per the map "
+                        "(fresh tip each; dispense into the liquid)."
+                    ),
+                    "5) Mix all wells by pipetting up and down 10x; avoid bubbles.",
+                    "6) Seal or cover and spin briefly.",
+                    (
+                        "7) Transfer 25 µL column-to-column with an 8-channel pipette: dilution "
+                        "col 1 -> assay col 1, col 2 -> col 2, col 3 -> col 3 (every assay plate); "
+                        "each 8-sample dilution column -> its triplicate assay columns, see the "
+                        "transfer table below."
+                    ),
+                    (
+                        f"8) Results are multiplied by the factor (x {factor:g}) automatically; "
+                        "standards are NOT multiplied - they are already at final concentration."
+                    ),
+                ]
+            else:
+                steps = [
+                    f'1) Label a clear 96-well plate "Dilution {plate}".',
+                    (
+                        f"2) Add {diluent_ul:g} µL diluent (same buffer as BCA standards) to all "
+                        "used wells; a multichannel/reservoir is fine."
+                    ),
+                    (
+                        f"3) Add {sample_ul:g} µL of each sample to its well per the map "
+                        "(fresh tip each; dispense into the liquid)."
+                    ),
+                    f"4) Mix by pipetting up and down 10x at ~{0.6 * final_ul:g} µL; avoid bubbles.",
+                    "5) Seal or cover and spin briefly.",
+                    (
+                        "6) Transfer 25 µL column-to-column with an 8-channel pipette: each "
+                        "8-sample dilution column -> its triplicate assay columns, see the "
+                        "transfer table below."
+                    ),
+                    f"7) Results are reported for the undiluted sample (x {factor:g}) automatically.",
+                ]
+            step_font, line_h = 7.5, 8.8
+        elif standard_wells:
             warnings = standard_prep_warnings(n_assay_plates)
             stock_concs = [c for c in STANDARD_PREP_ORDER if STANDARD_PREP[c][0] == STOCK]
             serial_concs = [c for c in STANDARD_PREP_ORDER if c not in stock_concs]
@@ -437,9 +553,30 @@ def write_dilution_pdf(
         cursor -= 14
 
         if standard_wells:
-            table_rows = sorted(standard_wells, key=lambda r: (r.well[0], int(r.well[1:])))
-            table_h = _draw_standards_table(c, table_rows, MARGIN, cursor, content_w, font_size=5.0)
+            if multichannel:
+                # Side-by-side to save vertical space: standards (cols 1-2) on the left,
+                # blank (col 3) on the right.
+                std_rows = sorted(
+                    (r for r in standard_wells if r.role == "standard"),
+                    key=lambda r: (int(r.well[1:]), r.well[0]),
+                )
+                blank_rows = sorted(
+                    (r for r in standard_wells if r.role == "blank"), key=lambda r: r.well
+                )
+                half_w = content_w * 0.5
+                h1 = _draw_standards_table(c, std_rows, MARGIN, cursor, half_w, font_size=5.0)
+                h2 = _draw_standards_table(
+                    c, blank_rows, MARGIN + half_w + 6, cursor, half_w, font_size=5.0
+                )
+                table_h = max(h1, h2)
+            else:
+                table_rows = sorted(standard_wells, key=lambda r: (r.well[0], int(r.well[1:])))
+                table_h = _draw_standards_table(c, table_rows, MARGIN, cursor, content_w, font_size=5.0)
             cursor -= table_h + 6
+
+        if multichannel and plate_transfers:
+            transfer_h = _draw_transfer_table(c, plate_transfers, MARGIN, cursor, content_w)
+            cursor -= transfer_h + 6
 
         available_h = cursor - MARGIN
         legend_gap = 10

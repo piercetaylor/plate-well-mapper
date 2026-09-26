@@ -335,6 +335,50 @@ def test_dilute_warns_on_low_remaining_standard_volume(tmp_path, capsys):
     assert "WARNING: STD1500" in out
 
 
+def test_dilute_multichannel_writes_all_files_incl_protocol(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=60)
+    outdir = tmp_path / "out"
+    rc = main(
+        ["dilute", samples_path, "-o", str(outdir), "--prefix", "mc", "--multichannel"]
+    )
+    assert rc == 0
+
+    expected = [
+        "mc_samples_diluted.csv",
+        "mc_dilution.csv",
+        "mc_dilution.pdf",
+        "mc_layout.csv",
+        "mc_plates.xlsx",
+        "mc_platemap.pdf",
+        "mc_bca_analysis.ipynb",
+        "mc_protocol.md",
+        "mc_protocol.pdf",
+    ]
+    for name in expected:
+        assert (outdir / name).exists(), name
+
+    out = capsys.readouterr().out
+    assert "assay_plates=3" in out
+
+
+def test_layout_avoid_edges_and_multichannel_errors(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["layout", samples_path, "-o", str(outdir), "--avoid-edges", "--multichannel"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+
+
+def test_dilute_avoid_edges_and_multichannel_errors(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["dilute", samples_path, "-o", str(outdir), "--avoid-edges", "--multichannel"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+
+
 def test_dilute_layout_sheet_has_diluted_dilution_factor(tmp_path):
     from platemap.excel import read_layout
 

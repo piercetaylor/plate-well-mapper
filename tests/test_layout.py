@@ -1,5 +1,7 @@
+import pytest
+
 from platemap.layout import build_layout, capacity, n_plates
-from platemap.samples import Sample
+from platemap.samples import PlatemapError, Sample
 
 
 def _samples(n):
@@ -77,3 +79,46 @@ def test_sample_fields():
         assert r.sample_name == "S1"
         assert r.dilution_factor == 1.0
     assert [r.replicate for r in sample_rows] == [1, 2, 3]
+
+
+def test_multichannel_capacity_and_n_plates():
+    assert capacity(multichannel=True) == 24
+    assert n_plates(60, multichannel=True) == 3
+    assert n_plates(24, multichannel=True) == 1
+    assert n_plates(25, multichannel=True) == 2
+
+
+def test_multichannel_avoid_edges_errors():
+    with pytest.raises(PlatemapError):
+        capacity(avoid_edges=True, multichannel=True)
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), avoid_edges=True, multichannel=True)
+
+
+def test_multichannel_standards_and_blank():
+    rows = build_layout(_samples(1), multichannel=True)
+    by_well = _by_well(rows, plate=1)
+    assert by_well["A1"].role == "standard" and by_well["A1"].conc_ugml == 2000.0
+    assert by_well["A1"].replicate == 1
+    assert by_well["A2"].role == "standard" and by_well["A2"].conc_ugml == 2000.0
+    assert by_well["A2"].replicate == 2
+    assert by_well["H1"].conc_ugml == 25.0
+    for row_letter in "ABCDEFGH":
+        assert by_well[f"{row_letter}3"].role == "blank"
+        assert by_well[f"{row_letter}3"].short_id == "BLK"
+
+
+def test_multichannel_sample_placement_60_samples():
+    rows = build_layout(_samples(60), multichannel=True)
+    by_plate_well = {(r.plate, r.well): r for r in rows}
+
+    assert by_plate_well[(1, "A4")].short_id == "S1"
+    assert by_plate_well[(1, "A5")].short_id == "S1"
+    assert by_plate_well[(1, "A6")].short_id == "S1"
+    assert by_plate_well[(1, "A7")].short_id == "S9"
+    assert by_plate_well[(1, "A8")].short_id == "S9"
+    assert by_plate_well[(1, "A9")].short_id == "S9"
+    assert by_plate_well[(2, "A4")].short_id == "S25"
+
+    plates = {r.plate for r in rows}
+    assert plates == {1, 2, 3}
