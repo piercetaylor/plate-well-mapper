@@ -159,3 +159,14 @@ def test_summarize_only_samples_in_order():
     assert not out["short_id"].str.startswith("STD").any()
     ids = out["short_id"].str[1:].astype(int).tolist()
     assert ids == sorted(ids)
+
+
+def test_uninvertible_reading_is_flagged_out_of_range():
+    df = subtract_blank(_synthetic_mapped_df())
+    fits = fit_standards(df, "4pl")
+    floor = min(fits[1].params["a"], fits[1].params["d"])
+    sample_rows = df.index[df["role"] == "sample"]
+    df.loc[sample_rows[0], "abs_blanked"] = floor - 0.01
+    out = quantify(df, "4pl")
+    row = out.loc[sample_rows[0]]
+    assert np.isnan(row["conc_ugml_est"]) and bool(row["out_of_range"])

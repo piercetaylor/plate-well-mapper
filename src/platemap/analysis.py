@@ -136,7 +136,9 @@ def quantify(df: pd.DataFrame, model: str = "4pl", include_blank: bool = True) -
         top_abs = abs_vals[np.argmax(conc)]
         low_abs = abs_vals[nonzero][np.argmin(conc[nonzero])]
         lo, hi = sorted((top_abs, low_abs))
-        out_of_range[mask] = (y < lo) | (y > hi)
+        # A reading the fitted curve cannot invert is also out of range.
+        no_estimate = np.isfinite(y) & ~np.isfinite(np.atleast_1d(x))
+        out_of_range[mask] = (y < lo) | (y > hi) | no_estimate
 
     df["conc_ugml_est"] = est
     df["conc_ugml_final"] = df["conc_ugml_est"] * df["dilution_factor"]
