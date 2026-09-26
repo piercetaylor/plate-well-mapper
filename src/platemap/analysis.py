@@ -83,19 +83,22 @@ def invert_linear(y, params: dict):
     return result if result.ndim else float(result)
 
 
-def _standard_curve(df: pd.DataFrame, plate) -> tuple[np.ndarray, np.ndarray]:
-    std = df[(df["plate"] == plate) & (df["role"].isin(["standard", "blank"]))]
+def _standard_curve(
+    df: pd.DataFrame, plate, include_blank: bool = True
+) -> tuple[np.ndarray, np.ndarray]:
+    roles = ["standard", "blank"] if include_blank else ["standard"]
+    std = df[(df["plate"] == plate) & (df["role"].isin(roles))]
     grouped = std.groupby("conc_ugml")["abs_blanked"].mean().sort_index().dropna()
     if len(grouped) < 2:
         raise ValueError(f"plate {plate}: fewer than 2 standard concentrations have readings")
     return grouped.index.to_numpy(dtype=float), grouped.to_numpy(dtype=float)
 
 
-def fit_standards(df: pd.DataFrame, model: str = "4pl") -> dict:
+def fit_standards(df: pd.DataFrame, model: str = "4pl", include_blank: bool = True) -> dict:
     """Fit the standard curve for each plate, falling back to linear on 4PL failure."""
     results = {}
     for plate in sorted(df["plate"].unique()):
-        x, y = _standard_curve(df, plate)
+        x, y = _standard_curve(df, plate, include_blank)
         if model == "4pl":
             try:
                 results[plate] = fit_4pl(x, y)
@@ -106,14 +109,14 @@ def fit_standards(df: pd.DataFrame, model: str = "4pl") -> dict:
     return results
 
 
-def quantify(df: pd.DataFrame, model: str = "4pl") -> pd.DataFrame:
+def quantify(df: pd.DataFrame, model: str = "4pl", include_blank: bool = True) -> pd.DataFrame:
     """Add conc_ugml_est, conc_ugml_final, and out_of_range columns."""
     if "abs_blanked" not in df.columns:
         df = subtract_blank(df)
     else:
         df = df.copy()
 
-    fits = fit_standards(df, model)
+    fits = fit_standards(df, model, include_blank)
 
     est = np.full(len(df), np.nan)
     out_of_range = np.zeros(len(df), dtype=bool)
@@ -128,7 +131,7 @@ def quantify(df: pd.DataFrame, model: str = "4pl") -> pd.DataFrame:
             x = invert_linear(y, fit.params)
         est[mask] = np.atleast_1d(x)
 
-        conc, abs_vals = _standard_curve(df, plate)
+        conc, abs_vals = _standard_curve(df, plate, include_blank)
         nonzero = conc > 0
         top_abs = abs_vals[np.argmax(conc)]
         low_abs = abs_vals[nonzero][np.argmin(conc[nonzero])]

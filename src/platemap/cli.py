@@ -73,7 +73,9 @@ def _build_parser() -> argparse.ArgumentParser:
     read_p.add_argument("readers", metavar="READER", nargs="+", help="one or more Gen5 CSV export files")
     read_p.add_argument("--plate", type=int, default=None, help="plate number for a single reader file")
     read_p.add_argument("--wavelength", default=None, help="wavelength/block label to select within each reader file")
+    read_p.add_argument("--read-label", default=None, help="exact Gen5 read label to select within each reader file (e.g. 'Blank Read 562nm:562')")
     read_p.add_argument("-o", "--out", default=None, metavar="OUT.xlsx", help="output workbook path (default: <workbook stem>_filled.xlsx)")
+    read_p.add_argument("--no-layout-check", action="store_true", help="skip cross-checking the Gen5 Layout block and Plate Number against our layout")
 
     dilute_p = subparsers.add_parser(
         "dilute",
@@ -103,6 +105,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="experiment date, YYYY-MM-DD (default: today)",
     )
 
+    analyze_p = subparsers.add_parser(
+        "analyze",
+        help="fit standard curves and quantify samples from a mapped CSV",
+        description=(
+            "Fit BSA standard curves per plate from a mapped CSV (from `platemap read`), "
+            "quantify sample concentrations, and write result tables plus a standard-curve PDF."
+        ),
+        epilog=(
+            "examples:\n"
+            "  platemap analyze platemap_plates_mapped.csv\n"
+            "  platemap analyze platemap_plates_mapped.csv --model linear --no-blank-in-fit\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    analyze_p.add_argument("mapped_csv", metavar="MAPPED.csv", help="mapped CSV from `platemap read`")
+    analyze_p.add_argument("--model", choices=("4pl", "linear"), default="4pl", help="standard-curve model (default: 4pl)")
+    analyze_p.add_argument("--no-blank-in-fit", action="store_true", help="exclude the blank (0 conc) point from the standard-curve fit")
+    analyze_p.add_argument("-o", "--outdir", default=None, help="output directory (default: the mapped CSV's folder)")
+    analyze_p.add_argument("--prefix", default=None, help="output filename prefix (default: mapped CSV stem with a trailing '_plates_mapped' or '_mapped' removed)")
+
     notebook_p = subparsers.add_parser(
         "notebook",
         help="write a Jupyter notebook for BCA standard-curve analysis",
@@ -116,6 +138,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="platemap_plates_mapped.csv",
         metavar="NAME",
         help="mapped CSV filename baked into the parameters cell (default: platemap_plates_mapped.csv)",
+    )
+    notebook_p.add_argument(
+        "--no-blank-in-fit",
+        action="store_true",
+        help="set INCLUDE_BLANK_IN_FIT = False in the parameters cell (exclude the blank point from the standard-curve fit)",
     )
 
     return parser
@@ -241,9 +268,16 @@ def _run_dilute(args: argparse.Namespace) -> int:
 def _run_read(args: argparse.Namespace) -> int:
     import csv
     import math
+    import re
 
     from platemap.excel import compute_mapped_rows, fill_reader, plate_count, read_layout
-    from platemap.gen5 import parse_gen5
+    from platemap.gen5 import (
+        check_gen5_layout,
+        parse_gen5,
+        parse_gen5_layout,
+        parse_gen5_metadata,
+        parse_gen5_reads,
+    )
 
     total_plates = plate_count(args.workbook)
 
@@ -260,17 +294,50 @@ def _run_read(args: argparse.Namespace) -> int:
             )
         plate_files = {i: f for i, f in enumerate(args.readers, start=1)}
 
-    plate_values = {
-        plate: parse_gen5(f, wavelength=args.wavelength) for plate, f in plate_files.items()
-    }
+    rows = read_layout(args.workbook)
+
+    plate_values: dict[int, dict[str, float]] = {}
+    plate_reads: dict[int, dict[str, dict[str, float]]] = {}
+    plate_layouts: dict[int, dict[str, tuple[str, str]]] = {}
+    plate_metadata: dict[int, dict[str, str]] = {}
+
+    for plate, f in plate_files.items():
+        metadata = parse_gen5_metadata(f)
+        plate_metadata[plate] = metadata
+
+        if not args.no_layout_check:
+            match = re.fullmatch(r"Plate\s+(\d+)", metadata.get("Plate Number", ""))
+            if match and int(match.group(1)) != plate:
+                raise PlatemapError(
+                    f"{f}: Gen5 'Plate Number' is 'Plate {match.group(1)}' but is being "
+                    f"assigned to plate {plate}"
+                )
+
+        plate_values[plate] = parse_gen5(
+            f, wavelength=args.wavelength, read_label=args.read_label
+        )
+        plate_reads[plate] = parse_gen5_reads(f)
+        plate_layouts[plate] = parse_gen5_layout(f)
+
+        if plate_layouts[plate] and not args.no_layout_check:
+            our_rows_for_plate = [r for r in rows if r.plate == plate]
+            errors, warnings = check_gen5_layout(our_rows_for_plate, plate_layouts[plate])
+            if errors:
+                shown = errors[:10]
+                message = f"{f}: {len(errors)} layout mismatch(es) vs Gen5 Layout block: " + "; ".join(shown)
+                if len(errors) > 10:
+                    message += f" (+{len(errors) - 10} more)"
+                raise PlatemapError(message)
+            for warning in warnings:
+                print(f"WARNING: {f}: {warning}")
 
     wb_path = Path(args.workbook)
     out_path = Path(args.out) if args.out else wb_path.with_name(f"{wb_path.stem}_filled.xlsx")
     mapped_csv_path = out_path.with_name(f"{wb_path.stem}_mapped.csv")
+    gen5_reads_csv_path = out_path.with_name(f"{wb_path.stem}_gen5_reads.csv")
 
     fill_reader(args.workbook, plate_values, str(out_path))
 
-    rows = read_layout(args.workbook)
     mapped = compute_mapped_rows(rows, plate_values)
 
     columns = ("plate", "well", "role", "short_id", "label", "conc_ugml", "sample_name", "dilution_factor", "replicate", "absorbance")
@@ -282,10 +349,38 @@ def _run_read(args: argparse.Namespace) -> int:
                 ["" if v is None or (isinstance(v, float) and math.isnan(v)) else v for v in (row[c] for c in columns)]
             )
 
+    gen5_columns = (
+        "plate", "well", "read_label", "value", "gen5_well_id", "gen5_conc",
+        "plate_number", "date", "time",
+    )
+    with open(gen5_reads_csv_path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(gen5_columns)
+        for plate in sorted(plate_reads):
+            metadata = plate_metadata.get(plate, {})
+            layout = plate_layouts.get(plate, {})
+            for read_label, data in plate_reads[plate].items():
+                for well, value in data.items():
+                    gen5_id, gen5_conc = layout.get(well, ("", ""))
+                    writer.writerow(
+                        [
+                            plate,
+                            well,
+                            read_label,
+                            "" if isinstance(value, float) and math.isnan(value) else value,
+                            gen5_id,
+                            gen5_conc,
+                            metadata.get("Plate Number", ""),
+                            metadata.get("Date", ""),
+                            metadata.get("Time", ""),
+                        ]
+                    )
+
     missing = sum(1 for row in mapped if isinstance(row["absorbance"], float) and math.isnan(row["absorbance"]))
 
     print(out_path)
     print(mapped_csv_path)
+    print(gen5_reads_csv_path)
     print(f"missing={missing}")
     return 0
 
@@ -293,8 +388,116 @@ def _run_read(args: argparse.Namespace) -> int:
 def _run_notebook(args: argparse.Namespace) -> int:
     from platemap.notebook import write_notebook
 
-    write_notebook(args.out, mapped_csv=args.mapped_csv)
+    write_notebook(args.out, mapped_csv=args.mapped_csv, include_blank_in_fit=not args.no_blank_in_fit)
     print(args.out)
+    return 0
+
+
+def _analyze_prefix(mapped_csv: str) -> str:
+    stem = Path(mapped_csv).stem
+    for suffix in ("_plates_mapped", "_mapped"):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return stem
+
+
+def _run_analyze(args: argparse.Namespace) -> int:
+    import csv
+    import json
+
+    try:
+        from platemap import analysis
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_pdf import PdfPages
+    except ImportError as exc:
+        raise PlatemapError(
+            "platemap analyze requires the 'notebook' extra "
+            "(pandas, numpy, scipy, matplotlib); install with `pip install 'platemap[notebook]'`"
+        ) from exc
+
+    mapped_path = Path(args.mapped_csv)
+    outdir = Path(args.outdir) if args.outdir else mapped_path.parent
+    outdir.mkdir(parents=True, exist_ok=True)
+    prefix = args.prefix if args.prefix else _analyze_prefix(mapped_path.name)
+
+    include_blank = not args.no_blank_in_fit
+
+    df = analysis.load_mapped(str(mapped_path))
+    df = analysis.subtract_blank(df)
+    fits = analysis.fit_standards(df, args.model, include_blank)
+    df = analysis.quantify(df, args.model, include_blank)
+    summary = analysis.summarize(df)
+
+    results_path = outdir / f"{prefix}_results.csv"
+    wells_path = outdir / f"{prefix}_results_wells.csv"
+    fits_path = outdir / f"{prefix}_curve_fits.csv"
+    pdf_path = outdir / f"{prefix}_standard_curves.pdf"
+
+    summary.to_csv(results_path, index=False)
+    df.to_csv(wells_path, index=False)
+
+    plates = sorted(fits)
+    with open(fits_path, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["plate", "model", "params", "r2", "n_points", "include_blank"])
+        for plate in plates:
+            fit = fits[plate]
+            x, _y = analysis._standard_curve(df, plate, include_blank)
+            writer.writerow([plate, fit.model, json.dumps(fit.params), fit.r2, len(x), include_blank])
+
+    with PdfPages(str(pdf_path)) as pdf:
+        for plate in plates:
+            fit = fits[plate]
+            x, y = analysis._standard_curve(df, plate, include_blank)
+
+            fig, ax = plt.subplots()
+            ax.scatter(x, y, label="standards (mean)")
+
+            plate_std = df[(df["plate"] == plate) & (df["role"].isin(["standard", "blank"]))]
+            ax.scatter(plate_std["conc_ugml"], plate_std["abs_blanked"], alpha=0.4, label="standard replicates")
+
+            x_max = max(x.max(), 1.0)
+            x_line = np.linspace(0.0, x_max, 200)
+            x_line_safe = np.where(x_line <= 0, 1e-6, x_line)
+            if fit.model == "4pl":
+                a, b, c, d = fit.params["a"], fit.params["b"], fit.params["c"], fit.params["d"]
+                with np.errstate(all="ignore"):
+                    y_line = d + (a - d) / (1 + (x_line_safe / c) ** b)
+            else:
+                y_line = fit.params["slope"] * x_line + fit.params["intercept"]
+            ax.plot(x_line, y_line, label=fit.model)
+
+            samples = df[(df["plate"] == plate) & (df["role"] == "sample")]
+            if len(samples):
+                ax.scatter(
+                    samples["conc_ugml_est"], samples["abs_blanked"], marker="x", color="red", label="samples"
+                )
+
+            ax.set_title(f"Plate {plate}: {fit.model} fit, R²={fit.r2:.4f}")
+            ax.set_xlabel("Concentration (µg/mL)")
+            ax.set_ylabel("Blanked absorbance")
+            ax.legend()
+            pdf.savefig(fig)
+            plt.close(fig)
+
+    for plate in plates:
+        fit = fits[plate]
+        print(f"plate {plate}: model={fit.model} r2={fit.r2:.4f} params={fit.params}")
+
+    samples_all = df[df["role"] == "sample"]
+    in_range = int((~samples_all["out_of_range"]).sum())
+    out_range = int(samples_all["out_of_range"].sum())
+    print(f"samples: in_range={in_range} out_of_range={out_range}")
+
+    print(results_path)
+    print(wells_path)
+    print(fits_path)
+    print(pdf_path)
     return 0
 
 
@@ -316,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_dilute(args)
         if args.command == "notebook":
             return _run_notebook(args)
+        if args.command == "analyze":
+            return _run_analyze(args)
     except PlatemapError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

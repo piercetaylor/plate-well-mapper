@@ -96,7 +96,8 @@ def test_notebook_executes(tmp_path):
     params_cell.source = (
         f'MAPPED_CSV = {str(mapped_csv)!r}\n'
         'MODEL = "4pl"\n'
-        f'OUTPUT_CSV = {str(output_csv)!r}'
+        f'OUTPUT_CSV = {str(output_csv)!r}\n'
+        'INCLUDE_BLANK_IN_FIT = True'
     )
 
     ep = ExecutePreprocessor(timeout=120, kernel_name="python3")

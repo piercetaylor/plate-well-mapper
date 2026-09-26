@@ -1,0 +1,80 @@
+
+
+Software Version	3.12.08
+
+
+
+Experiment File Path:	C:\Users\Public\Documents\Experiments\example.xpt
+Protocol File Path:	C:\Users\Public\Documents\Protocols\example.prt
+
+
+
+Plate Number	Plate 2
+Date	9/25/2026
+Time	7:19:57 PM
+Reader Type:	Cytation5
+Reader Serial Number:	00000000
+Reading Type	Reader
+
+Procedure Details
+
+Plate Type	96 WELL PLATE (Use plate lid)
+Eject plate on completion	
+Comment	Make sure to label plate number.
+	Display comment when procedure is run
+Shake	Orbital: 0:10 (MM:SS)
+	Frequency: 237 cpm (4 mm)
+Read	Read 562nm
+	Absorbance Endpoint
+	Full Plate
+	Wavelengths:  562
+	Read Speed: Normal,  Delay: 100 msec,  Measurements/Data Point: 8
+
+Layout
+	1	2	3	4	5	6	7	8	9	10	11	12
+A	BCA:1	BCA:1	BCA:2	BCA:2	BCA:3	BCA:3	BCA:4	BCA:4	BCA:5	BCA:5	BCA:6	BCA:6	Well ID
+	2000	2000	1500	1500	1000	1000	750	750	500	500	250	250	Conc/Dil
+B	BCA:7	BCA:7	BCA:8	BCA:8	BLK	BLK	SPL1	SPL1	SPL1	SPL2	SPL2	SPL2	Well ID
+	125	125	25	25									Conc/Dil
+C	SPL3	SPL3	SPL3	SPL4	SPL4	SPL4	SPL5	SPL5	SPL5	SPL6	SPL6	SPL6	Well ID
+													Conc/Dil
+D	SPL7	SPL7	SPL7	SPL8	SPL8	SPL8	SPL9	SPL9	SPL9	SPL10	SPL10	SPL10	Well ID
+													Conc/Dil
+E	SPL11	SPL11	SPL11	SPL12	SPL12	SPL12	SPL13	SPL13	SPL13	SPL14	SPL14	SPL14	Well ID
+													Conc/Dil
+F	SPL15	SPL15	SPL15	SPL16	SPL16	SPL16	SPL17	SPL17	SPL17	SPL18	SPL18	SPL18	Well ID
+													Conc/Dil
+G	SPL19	SPL19	SPL19	SPL20	SPL20	SPL20	SPL21	SPL21	SPL21	SPL22	SPL22	SPL22	Well ID
+													Conc/Dil
+H	SPL23	SPL23	SPL23	SPL24	SPL24	SPL24	SPL25	SPL25	SPL25	SPL26	SPL26	SPL26	Well ID
+													Conc/Dil
+
+
+
+Actual Temperature:	22.7
+
+Results
+	1	2	3	4	5	6	7	8	9	10	11	12
+A	0.100	0.110	0.120	0.130	0.140	0.150	0.160	0.170	0.180	0.190	0.200	0.210	Read 562nm:562
+	0.220	0.230	0.240	0.250	0.260	0.270	0.280	0.290	0.300	0.310	0.320	0.330	Blank Read 562nm:562
+B	0.340	0.350	0.360	0.370	0.380	0.390	0.400	0.410	0.420	0.430	0.440	0.450	Read 562nm:562
+	0.460	0.470	0.480	0.490	0.500	0.510	0.520	0.530	0.540	0.550	0.560	0.570	Blank Read 562nm:562
+C	0.580	0.590	0.600	0.610	0.620	0.630	0.640	0.650	0.660	0.670	0.680	0.690	Read 562nm:562
+	0.700	0.710	0.720	0.730	0.740	0.750	0.760	0.770	0.780	0.790	0.800	0.810	Blank Read 562nm:562
+D	0.820	0.830	0.840	0.850	0.860	0.870	0.880	0.890	0.900	0.910	0.920	0.930	Read 562nm:562
+	0.940	0.950	0.960	0.970	0.980	0.990	1.000	1.010	1.020	1.030	1.040	1.050	Blank Read 562nm:562
+E	1.060	1.070	1.080	1.090	1.100	1.110	1.120	1.130	1.140	1.150	1.160	1.170	Read 562nm:562
+	1.180	1.190	1.200	1.210	1.220	1.230	1.240	1.250	1.260	1.270	1.280	1.290	Blank Read 562nm:562
+F	1.300	1.310	1.320	1.330	1.340	1.350	1.360	1.370	1.380	1.390	1.400	1.410	Read 562nm:562
+	1.420	1.430	1.440	1.450	1.460	1.470	1.480	1.490	1.500	1.510	1.520	1.530	Blank Read 562nm:562
+G	1.540	1.550	1.560	1.570	1.580	1.590	1.600	1.610	1.620	1.630	1.640	1.650	Read 562nm:562
+	1.660	1.670	1.680	1.690	1.700	1.710	1.720	1.730	1.740	1.750	1.760	1.770	Blank Read 562nm:562
+H	1.780	1.790	1.800	1.810	1.820	1.830	1.840	1.850	1.860	1.870	1.880	1.890	Read 562nm:562
+	1.900	1.910	1.920	1.930	1.940	1.950	1.960	1.970	1.980	1.990	2.000	2.010	Blank Read 562nm:562
+
+
+StdCurve Fitting Results
+
+Curve Name	Curve Formula	A	B	R2	Fit F Prob
+StdCurve	Y=A*X+B	1	-0.0979	1	?????
+

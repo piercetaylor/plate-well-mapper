@@ -3,7 +3,11 @@
 import nbformat as nbf
 
 
-def build_notebook(mapped_csv: str = "platemap_plates_mapped.csv", output_csv: str = "bca_results.csv"):
+def build_notebook(
+    mapped_csv: str = "platemap_plates_mapped.csv",
+    output_csv: str = "bca_results.csv",
+    include_blank_in_fit: bool = True,
+):
     """Build the analysis notebook (nbformat NotebookNode), outputs stripped."""
     nb = nbf.v4.new_notebook()
 
@@ -34,7 +38,8 @@ def build_notebook(mapped_csv: str = "platemap_plates_mapped.csv", output_csv: s
     params_code = nbf.v4.new_code_cell(
         f"MAPPED_CSV = {mapped_csv!r}\n"
         'MODEL = "4pl"\n'
-        f"OUTPUT_CSV = {output_csv!r}"
+        f"OUTPUT_CSV = {output_csv!r}\n"
+        f"INCLUDE_BLANK_IN_FIT = {include_blank_in_fit!r}"
     )
     params_code.metadata["tags"] = ["parameters"]
 
@@ -45,14 +50,15 @@ def build_notebook(mapped_csv: str = "platemap_plates_mapped.csv", output_csv: s
     )
 
     fit_code = nbf.v4.new_code_cell(
-        "fits = fit_standards(df, MODEL)\n"
+        "fits = fit_standards(df, MODEL, include_blank=INCLUDE_BLANK_IN_FIT)\n"
         "for plate, fit in sorted(fits.items()):\n"
         "    print(f\"plate {plate}: model={fit.model} params={fit.params} r2={fit.r2:.4f}\")"
     )
 
     plot_code = nbf.v4.new_code_cell(
+        "_std_roles = ['standard', 'blank'] if INCLUDE_BLANK_IN_FIT else ['standard']\n"
         "for plate, fit in sorted(fits.items()):\n"
-        "    std = df[(df['plate'] == plate) & (df['role'].isin(['standard', 'blank']))]\n"
+        "    std = df[(df['plate'] == plate) & (df['role'].isin(_std_roles))]\n"
         "    curve = std.groupby('conc_ugml')['abs_blanked'].mean().sort_index()\n"
         "    xs = curve.index.to_numpy(dtype=float)\n"
         "    ys = curve.to_numpy(dtype=float)\n"
@@ -75,7 +81,9 @@ def build_notebook(mapped_csv: str = "platemap_plates_mapped.csv", output_csv: s
         "    plt.show()"
     )
 
-    quantify_code = nbf.v4.new_code_cell("df = quantify(df, MODEL)\ndf.head()")
+    quantify_code = nbf.v4.new_code_cell(
+        "df = quantify(df, MODEL, include_blank=INCLUDE_BLANK_IN_FIT)\ndf.head()"
+    )
 
     summary_code = nbf.v4.new_code_cell("summary = summarize(df)\nsummary")
 
@@ -117,8 +125,11 @@ def write_notebook(
     path: str,
     mapped_csv: str = "platemap_plates_mapped.csv",
     output_csv: str = "bca_results.csv",
+    include_blank_in_fit: bool = True,
 ) -> None:
     """Build and write the analysis notebook to path."""
-    nb = build_notebook(mapped_csv=mapped_csv, output_csv=output_csv)
+    nb = build_notebook(
+        mapped_csv=mapped_csv, output_csv=output_csv, include_blank_in_fit=include_blank_in_fit
+    )
     with open(path, "w", encoding="utf-8") as fh:
         nbf.write(nb, fh)

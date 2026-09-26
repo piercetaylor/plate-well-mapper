@@ -5,7 +5,7 @@
 ### `platemap`
 
 ```
-usage: platemap [-h] [--version] {layout,read,dilute,notebook} ...
+usage: platemap [-h] [--version] {layout,read,dilute,analyze,notebook} ...
 ```
 
 - `-h`, `--help`: show help and exit.
@@ -54,7 +54,8 @@ CSV exports, and write a mapped CSV.
 
 ```
 usage: platemap read [-h] [--plate PLATE] [--wavelength WAVELENGTH]
-                      [-o OUT.xlsx]
+                      [--read-label READ_LABEL] [-o OUT.xlsx]
+                      [--no-layout-check]
                       WORKBOOK READER [READER ...]
 ```
 
@@ -65,16 +66,37 @@ usage: platemap read [-h] [--plate PLATE] [--wavelength WAVELENGTH]
   `1..<plate count>`.
 - `--wavelength WAVELENGTH`: wavelength/block label to select within each
   reader file, when a file has more than one read (see below).
+- `--read-label READ_LABEL`: exact Gen5 read label to select within each
+  reader file (e.g. `"Blank Read 562nm:562"`), overriding `--wavelength`
+  and the default raw-read selection.
 - `-o OUT.xlsx`, `--out OUT.xlsx`: output workbook path (default
   `<workbook stem>_filled.xlsx`, next to the input workbook).
+- `--no-layout-check`: skip cross-checking each file's Gen5 Layout block
+  (and `Plate Number` metadata) against our layout.
 
 Without `--plate`, reader files map to plates 1, 2, 3, ... in the order
 given. Supplying more reader files than the workbook has plates is an
 error.
 
-Writes the filled workbook and `<workbook stem>_mapped.csv` next to the
-output workbook, then prints both paths and `missing=<N>` (wells with no
-absorbance value).
+If a reader file has a Layout block, `platemap read` cross-checks it
+against our layout for that plate: standard wells must be Gen5 `BCA:`/
+`STD` ids with a matching concentration, blank wells must be `BLK`, and
+sample wells must be `SPL<k>` where `k` is the sample group's 1-based
+rank in well order on that plate. Mismatches (wrong id, wrong
+concentration, or a well used in ours but empty in Gen5) are errors,
+reported together (up to 10, with a count of any more) as a
+`PlatemapError`. A well that's empty in ours but assigned in Gen5 is
+only a warning, printed as `WARNING: <file>: <message>`. If the file's
+`Plate Number` metadata is `Plate N` and `N` doesn't match the plate
+it's being assigned to, that's also an error (this catches a mislabelled
+export). Pass `--no-layout-check` to skip both checks.
+
+Writes the filled workbook, `<workbook stem>_mapped.csv` (the selected
+read, mapped to our layout), and `<workbook stem>_gen5_reads.csv` (a long
+table of every numeric read of every file: `plate, well, read_label,
+value, gen5_well_id, gen5_conc, plate_number, date, time`), next to the
+output workbook. Prints all three paths and `missing=<N>` (wells with no
+absorbance value in the selected read).
 
 ### `platemap dilute SAMPLES [options]`
 
@@ -156,15 +178,62 @@ entirely) for dilute samples.
 
 ```
 usage: platemap notebook [-h] [-o PATH] [--mapped-csv NAME]
+                          [--no-blank-in-fit]
 ```
 
 - `-o PATH`, `--out PATH`: output notebook path (default
   `bca_analysis.ipynb`).
 - `--mapped-csv NAME`: mapped CSV filename baked into the notebook's
   `MAPPED_CSV` parameter (default `platemap_plates_mapped.csv`).
+- `--no-blank-in-fit`: set `INCLUDE_BLANK_IN_FIT = False` in the
+  notebook's parameters cell (see "Blank handling" below).
 
 Writes a Jupyter notebook for fitting the standard curve and quantifying
 samples from a mapped CSV.
+
+### `platemap analyze MAPPED.csv [options]`
+
+Fit standard curves and quantify samples directly from the command line
+(no notebook step required).
+
+```
+usage: platemap analyze [-h] [--model {4pl,linear}] [--no-blank-in-fit]
+                         [-o OUTDIR] [--prefix PREFIX]
+                         MAPPED.csv
+```
+
+- `MAPPED.csv`: the mapped CSV from `platemap read`.
+- `--model {4pl,linear}`: standard-curve model (default `4pl`).
+- `--no-blank-in-fit`: exclude the blank (0 conc) point from the
+  standard-curve fit (see "Blank handling" below).
+- `-o OUTDIR`, `--outdir OUTDIR`: output directory (default: the mapped
+  CSV's folder).
+- `--prefix PREFIX`: output filename prefix (default: the mapped CSV's
+  stem with a trailing `_plates_mapped` or `_mapped` removed).
+
+Requires the `notebook` extra (pandas, numpy, scipy, matplotlib); prints
+a clear error if it isn't installed.
+
+Examples:
+
+```
+platemap analyze platemap_plates_mapped.csv
+platemap analyze platemap_plates_mapped.csv --model linear --no-blank-in-fit -o results
+```
+
+Writes:
+
+- `<prefix>_results.csv`: one row per sample (`summarize`).
+- `<prefix>_results_wells.csv`: one row per well (`quantify`).
+- `<prefix>_curve_fits.csv`: one row per plate, `plate, model, params
+  (JSON), r2, n_points, include_blank`.
+- `<prefix>_standard_curves.pdf`: one page per plate, standard means and
+  replicates, the fitted curve, and sample absorbances plotted at their
+  estimated concentration, titled with the model and R².
+
+Prints, per plate, `model`, `params`, and `r2`; then a total
+`samples: in_range=<N> out_of_range=<N>` count; then the four output
+paths.
 
 ## Sample CSV format
 
@@ -292,12 +361,19 @@ wavelength, etc.) and a "562" (or similar) label line just before or
 inside the header row; `platemap` skips the metadata and locates the
 matrix by its header shape.
 
-- If a file contains a single read/wavelength, no `--wavelength` is
-  needed.
-- If it contains more than one block (e.g. both 562 nm and a reference
-  wavelength), pass `--wavelength 562` (or whichever wavelength label
-  matches your export) to select the right one. Without `--wavelength`,
-  the first block found is used.
+A single matrix block can contain more than one 8x12 grid, distinguished
+by a trailing label per row (e.g. Gen5 3.12's tab-delimited export
+writes, per row letter, a "raw" line ending `Read 562nm:562` followed by
+a blank-subtracted line ending `Blank Read 562nm:562`); `platemap`
+groups these into separate "reads" by that trailing label.
+
+- If a file contains a single read, no `--wavelength` or `--read-label`
+  is needed.
+- If it contains more than one read (e.g. raw + blank-subtracted, or
+  multiple wavelengths), pass `--wavelength 562` to select by wavelength,
+  or `--read-label "Blank Read 562nm:562"` to select by exact label.
+  Without either, `platemap` picks the first numeric read whose label
+  doesn't start with `Blank` (i.e. the raw read).
 - Cells containing `OVRFLW`, `?????`, or anything non-numeric are read
   as missing (empty) rather than erroring.
 - A "long format" export (a `Well` column followed by one or more value
@@ -305,13 +381,23 @@ matrix by its header shape.
   is used, or the first value column if not specified.
 - If no matrix or `Well` column can be found in the file, `platemap
   read` reports an error naming the file.
+- A file's `Layout` block (a `Well ID`/`Conc/Dil` matrix instead of
+  numeric reads) is never selected as a read; it's parsed separately for
+  the layout cross-check (see `platemap read` above) and is ignored by
+  `parse_gen5`/`parse_gen5_reads`.
+- Trailing sections such as Gen5's `StdCurve Fitting Results` (which can
+  contain `?????` for an undefined R²) don't match the 1..12 matrix shape
+  and are ignored.
 
-The parser was built against Gen5's documented export layout and a set
-of synthetic fixtures (`tests/fixtures/gen5_example.csv`,
-`gen5_two_blocks.csv`, `gen5_long_format.csv`); it has not been
-exhaustively tested against every Gen5 version or every export template.
-If a real export from your instrument doesn't parse, compare it against
-the fixtures and check the header/label lines are in a similar place.
+The parser was built against Gen5's documented export layout, a set of
+synthetic fixtures (`tests/fixtures/gen5_example.csv`,
+`gen5_two_blocks.csv`, `gen5_long_format.csv`), and a fixture derived
+from a real Gen5 3.12 tab-delimited export
+(`tests/fixtures/gen5_real_format.txt`, with absorbance values replaced
+by synthetic ones); it has not been exhaustively tested against every
+Gen5 version or every export template. If a real export from your
+instrument doesn't parse, compare it against the fixtures and check the
+header/label lines are in a similar place.
 
 ## Analysis notebook
 
@@ -322,10 +408,14 @@ the fixtures and check the header/label lines are in a similar place.
 MAPPED_CSV = "platemap_plates_mapped.csv"
 MODEL = "4pl"
 OUTPUT_CSV = "bca_results.csv"
+INCLUDE_BLANK_IN_FIT = True
 ```
 
-Set `MAPPED_CSV` to the mapped CSV from `platemap read`, and `MODEL` to
-`"4pl"` or `"linear"`.
+Set `MAPPED_CSV` to the mapped CSV from `platemap read`, `MODEL` to
+`"4pl"` or `"linear"`, and `INCLUDE_BLANK_IN_FIT` to `False` to exclude
+the blank (0 conc) point from the standard-curve fit (see "Blank
+handling" below); `platemap notebook --no-blank-in-fit` sets it to
+`False` when generating the notebook.
 
 Steps performed:
 
@@ -333,10 +423,10 @@ Steps performed:
 2. Subtract each plate's mean blank absorbance from every well
    (`abs_blanked`).
 3. Fit the standard curve per plate, using the mean blanked absorbance
-   at each standard concentration (including the blank, at 0). The 4PL
-   model is `y = d + (a-d)/(1+(x/c)^b)`; if the 4PL fit fails to
-   converge, the notebook warns and falls back to a linear fit for that
-   plate.
+   at each standard concentration (including the blank, at 0, unless
+   `INCLUDE_BLANK_IN_FIT` is `False`). The 4PL model is
+   `y = d + (a-d)/(1+(x/c)^b)`; if the 4PL fit fails to converge, the
+   notebook warns and falls back to a linear fit for that plate.
 4. Plot each plate's standard curve with the fitted line.
 5. Quantify every well: `conc_ugml_est` (inverted from the fit, on the
    undiluted well), `conc_ugml_final` (`conc_ugml_est * dilution_factor`),
@@ -348,6 +438,24 @@ Steps performed:
 7. Export the summary to `OUTPUT_CSV` and the full well-level table to
    `OUTPUT_CSV` with `_wells` inserted before the extension (e.g.
    `bca_results_wells.csv`).
+
+## Blank handling
+
+By default, the standard curve fit includes the blank as the (0, mean
+blank absorbance) point. This assumes the blank well's absorbance is a
+good estimate of the background at zero analyte for every standard well
+too.
+
+If your blanks are water/reagent-only (no diluent) but your standards
+and samples are prepared in a diluent that itself contributes
+background absorbance, the blank point can sit well below where the
+standard line would actually cross zero concentration, dragging the fit
+off and biasing every estimated concentration (worse than leaving the
+blank out entirely). In that case, pass `--no-blank-in-fit` (`platemap
+notebook --no-blank-in-fit`, `platemap analyze --no-blank-in-fit`, or
+set `INCLUDE_BLANK_IN_FIT = False` in the notebook) to fit only the
+nonzero standards; blank subtraction (`abs_blanked`) still happens
+either way.
 
 ## Troubleshooting
 
