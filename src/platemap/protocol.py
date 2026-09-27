@@ -70,6 +70,10 @@ def _plate_sample_ranges(layout_rows: list[LayoutRow]) -> list[tuple[int, str, s
     return out
 
 
+def _well_key(well: str) -> tuple[int, int]:
+    return ROWS_FULL.index(well[0]), int(well[1:])
+
+
 def _wr_volumes(n_wells: int) -> tuple[float, float, float]:
     """Return (total_ul_with_excess, reagent_a_ml, reagent_b_ml) for n_wells at 200 uL/well."""
     total_ul = n_wells * WR_WELL_UL * WR_EXCESS
@@ -113,6 +117,12 @@ def build_protocol(
 
     factor = plan.factor if plan else 1.0
     wr_range_low, wr_range_high = 25.0, 2000.0
+
+    plate1_rows = [r for r in layout_rows if r.plate == plates[0]] if plates else []
+    buffer_blank_wells = sorted({r.well for r in plate1_rows if r.role == "blank"}, key=_well_key)
+    wr_only_wells = sorted(
+        {r.well for r in plate1_rows if r.role == "reagent_blank"}, key=_well_key
+    )
 
     # ---- overview -----------------------------------------------------
     plate_ranges = _plate_sample_ranges(layout_rows)
@@ -193,10 +203,21 @@ def build_protocol(
             f"Ensure at least {sample_ul_needed:g} µL of each sample is available "
             f"({plan.sample_volume_ul:g} µL used + 5 µL dead volume).",
         )
-    before_lines.append(
-        "Use the SAME diluent for the standards, the blank, and the samples. "
-        "The blank must be diluent + Working Reagent, not Working Reagent alone."
-    )
+    if wr_only_wells:
+        before_lines.append(
+            "Use the SAME diluent for the standards, the buffer blank, and the samples. "
+            "This layout uses two blank types: buffer blank wells "
+            f"({', '.join(buffer_blank_wells)}) contain diluent + Working Reagent and are "
+            "used for blank subtraction and as the 0 µg/mL curve point; WR-only wells "
+            f"({', '.join(wr_only_wells)}) contain Working Reagent only (no diluent/buffer) "
+            "and measure reagent background, reported in <prefix>_blank_qc.csv, not used as "
+            "a blank."
+        )
+    else:
+        before_lines.append(
+            "Use the SAME diluent for the standards, the blank, and the samples. "
+            "The blank must be diluent + Working Reagent, not Working Reagent alone."
+        )
     sections.append(Section("Before starting", [_para(x) for x in before_lines]))
 
     # ---- dilution plate (only when diluting) -------------------------------
@@ -209,6 +230,17 @@ def build_protocol(
             "each sample, to its dilution well.",
             "Mix all wells by pipetting up and down 10x; avoid bubbles. Seal and spin briefly.",
         ]
+        if wr_only_wells:
+            dil_steps.append(
+                f"Leave {', '.join(wr_only_wells)} empty on the dilution plate (WR-only wells "
+                "get no diluent and no buffer)."
+            )
+            dil_steps.append(
+                f"On the assay plate: buffer blank wells ({', '.join(buffer_blank_wells)}) get "
+                "25 µL buffer from the dilution plate + 200 µL Working Reagent; WR-only wells "
+                f"({', '.join(wr_only_wells)}) get only 200 µL Working Reagent (no transfer from "
+                "the dilution plate)."
+            )
         std_rows = sorted(
             (w for w in dilution_wells if w.role in ("standard", "blank")),
             key=lambda w: (w.plate, w.well[0], int(w.well[1:])),
@@ -268,13 +300,25 @@ def build_protocol(
         )
         lane = "row" if channels == 12 else "col"
         plating_steps = []
+        wr_only_cols = sorted({int(w[1:]) for w in wr_only_wells}) if wr_only_wells else []
+        wr_only_col_range = (
+            f"{wr_only_cols[0]}–{wr_only_cols[-1]}" if len(wr_only_cols) > 1
+            else (str(wr_only_cols[0]) if wr_only_cols else "")
+        )
         if transfers:
             for assay_plate, dplate, dindex, aindices, contents in transfers:
                 aindex_str = ", ".join(str(a) for a in aindices)
-                plating_steps.append(
+                line = (
                     f"Plate {assay_plate}: dilution plate {dplate} {lane} {dindex} ({contents}) -> "
                     f"assay {lane}(s) {aindex_str}, 25 µL, {channels}-channel pipette."
                 )
+                if channels == 12 and wr_only_col_range and contents.startswith("standards"):
+                    line += (
+                        f" Note: wells {wr_only_col_range} of the dilution rows are empty, so "
+                        f"those assay wells receive no liquid; you may remove tips "
+                        f"{wr_only_col_range} for this transfer."
+                    )
+                plating_steps.append(line)
         elif channels == 12:
             for plate in plates:
                 plate_rows = [r for r in layout_rows if r.plate == plate]
@@ -298,10 +342,13 @@ def build_protocol(
                         f"Plate {plate}: source column -> assay cols "
                         f"{', '.join(str(c) for c in cols)}, 25 µL, 8-channel pipette."
                     )
-        plating_steps.append(
-            f"Add {WR_WELL_UL:g} µL Working Reagent to every used well with a {channels}-channel "
-            "pipette, one assay plate at a time; record the time WR was added for each plate."
+        wr_note = f" (including the WR-only wells {', '.join(wr_only_wells)})" if wr_only_wells else ""
+        wr_step = (
+            f"Add {WR_WELL_UL:g} µL Working Reagent to every used well{wr_note} with a "
+            f"{channels}-channel pipette, one assay plate at a time; record the time WR was "
+            "added for each plate."
         )
+        plating_steps.append(wr_step)
         sections.append(Section("Plating", [_steps(plating_steps)]))
     else:
         rep_word = {2: "duplicate", 3: "triplicate"}.get(replicates, f"{replicates}-fold")
@@ -349,6 +396,12 @@ def build_protocol(
     ]
     if file_names.get("blank_is_wr_only"):
         analysis_notes.append("Add `--no-blank-in-fit` (the blank was WR only, not diluent + WR).")
+    if wr_only_wells:
+        analysis_notes.append(
+            "Buffer blanks are used for blank subtraction and as the 0 µg/mL curve point; "
+            "WR-only wells are reported in `<prefix>_blank_qc.csv` as reagent background; "
+            "`--no-blank-in-fit` is not needed."
+        )
     analysis_notes.append(
         "The Gen5 protocol layout must match this layout, or pass `--no-layout-check` to "
         "`platemap read`."
@@ -377,19 +430,25 @@ def build_protocol(
     )
 
     # ---- buffer compatibility -------------------------------------------------
-    sections.append(
-        Section(
-            "Buffer compatibility",
-            [
-                _para(
-                    "Reducing agents (DTT, TCEP, beta-mercaptoethanol), imidazole above 50 mM, "
-                    "and chelators (EDTA, EGTA) above 10 mM can interfere with the BCA reaction. "
-                    "Lower dilution factors dilute these interferents less; consider a higher "
-                    "dilution factor if interference is suspected."
-                )
-            ],
+    buffer_compat_blocks = [
+        _para(
+            "Reducing agents (DTT, TCEP, beta-mercaptoethanol), imidazole above 50 mM, "
+            "and chelators (EDTA, EGTA) above 10 mM can interfere with the BCA reaction. "
+            "Lower dilution factors dilute these interferents less; consider a higher "
+            "dilution factor if interference is suspected."
         )
-    )
+    ]
+    if plan:
+        imidazole_lines = []
+        for imidazole_mm in (250, 300):
+            well_mm = imidazole_mm / factor
+            flag = " (above the tolerated limit)" if well_mm > 50 else ""
+            imidazole_lines.append(
+                f"At dilution factor {factor:g}, a sample buffer with {imidazole_mm:g} mM "
+                f"imidazole gives {well_mm:g} mM in the well (BCA tolerates about 50 mM){flag}."
+            )
+        buffer_compat_blocks.append(_para(" ".join(imidazole_lines)))
+    sections.append(Section("Buffer compatibility", buffer_compat_blocks))
 
     # ---- record table --------------------------------------------------------
     record_rows = [[f"Plate {p}", "", "", "", ""] for p in plates] or [["Plate 1", "", "", "", ""]]

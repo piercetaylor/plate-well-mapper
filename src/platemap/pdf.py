@@ -145,6 +145,8 @@ def _draw_plate(
             text = str(int(lr.conc_ugml))
         elif lr.role == "blank":
             text = "BLK"
+        elif lr.role == "reagent_blank":
+            text = "WR"
         else:
             text = lr.short_id
         cells[well] = (hexcolor, text)
@@ -154,9 +156,12 @@ def _draw_plate(
     seen_samples: dict[str, str] = {}
     std_concs: list[float] = []
     has_blank = False
+    has_reagent_blank = False
     for lr in plate_rows:
         if lr.role == "blank":
             has_blank = True
+        elif lr.role == "reagent_blank":
+            has_reagent_blank = True
         elif lr.role == "standard":
             if lr.conc_ugml not in std_concs:
                 std_concs.append(lr.conc_ugml)
@@ -164,13 +169,16 @@ def _draw_plate(
             suffix = f" (DF {lr.dilution_factor:g})" if lr.dilution_factor not in (None, 1) else ""
             seen_samples[lr.short_id] = (f"{lr.short_id} — {lr.label}", suffix)
 
-    std_line = ""
+    std_lines: list[str] = []
     if std_concs:
         std_concs_sorted = sorted(std_concs, reverse=True)
         conc_str = "/".join(str(int(v)) for v in std_concs_sorted)
         std_line = f"Standards: number in well = BSA µg/mL ({conc_str})"
         if has_blank:
             std_line += "; BLK = Blank"
+        std_lines.append(std_line)
+    if has_reagent_blank:
+        std_lines.append("WR = WR only (no buffer)")
 
     sample_entries = list(seen_samples.values())
     transfer_lines = transfer_lines or []
@@ -179,7 +187,7 @@ def _draw_plate(
     font_size, line_h, n_cols = 6.0, 7.2, 2
     for candidate_font in (6.0, 5.5, 5.0, 4.5, 4.0):
         candidate_line_h = candidate_font + 1.4
-        std_rows = (1 if std_line else 0) + len(transfer_lines)
+        std_rows = len(std_lines) + len(transfer_lines)
         rows_needed = std_rows + math.ceil(len(sample_entries) / n_cols) if sample_entries else std_rows
         if rows_needed * candidate_line_h <= legend_available_h or candidate_font == 4.0:
             font_size, line_h = candidate_font, candidate_line_h
@@ -189,7 +197,7 @@ def _draw_plate(
 
     ly = legend_top
     c.setFont("Helvetica", font_size)
-    if std_line:
+    for std_line in std_lines:
         c.drawString(x, ly, _truncate(std_line, int(w / (font_size * 0.5))))
         ly -= line_h
     for line in transfer_lines:
@@ -396,6 +404,10 @@ def write_dilution_pdf(
         plate_wells = [w for w in wells if w.plate == plate]
         sample_wells = [w for w in plate_wells if w.role == "sample"]
         standard_wells = [w for w in plate_wells if w.role in ("standard", "blank")]
+        reagent_blank_wells = sorted(
+            (w for w in plate_wells if w.role == "reagent_blank"),
+            key=lambda w: (w.well[0], int(w.well[1:])),
+        )
 
         _draw_header(c, experiment, date)
         cursor = PAGE_H - MARGIN - 0.8 * inch
@@ -427,11 +439,29 @@ def write_dilution_pdf(
                 stock_list = ", ".join(str(c) for c in stock_concs)
                 serial_list = ", ".join(str(c) for c in serial_concs)
                 if channels == 12:
-                    step2 = (
-                        f"2) Add diluent to sample rows C-H ({diluent_ul:g} µL/well) and 200 µL "
-                        "diluent to blank wells A9-A12 and B9-B12; standard volumes vary, see "
-                        "the table below."
+                    buffer_blank_wells = sorted(
+                        (w.well for w in standard_wells if w.role == "blank"),
+                        key=lambda w: (w[0], int(w[1:])),
                     )
+                    if reagent_blank_wells:
+                        wr_cols = sorted({int(w.well[1:]) for w in reagent_blank_wells})
+                        wr_col_range = f"{wr_cols[0]}–{wr_cols[-1]}" if len(wr_cols) > 1 else str(wr_cols[0])
+                        wr_well_str = ", ".join(w.well for w in reagent_blank_wells)
+                        step2 = (
+                            f"2) Add diluent to sample rows C-H ({diluent_ul:g} µL/well) and 200 µL "
+                            f"diluent to buffer blank wells {', '.join(buffer_blank_wells)}; leave "
+                            f"{wr_well_str} empty (WR-only wells, no diluent); standard volumes vary, "
+                            "see the table below. On the assay plate, buffer blank wells "
+                            f"({', '.join(buffer_blank_wells)}) get 25 µL buffer from the dilution "
+                            f"plate + 200 µL WR; WR-only wells ({wr_well_str}) get only 200 µL WR."
+                        )
+                    else:
+                        wr_col_range = ""
+                        step2 = (
+                            f"2) Add diluent to sample rows C-H ({diluent_ul:g} µL/well) and 200 µL "
+                            "diluent to blank wells A9-A12 and B9-B12; standard volumes vary, see "
+                            "the table below."
+                        )
                     step3_mid = "same row, same-column"
                     step7 = (
                         f"7) Transfer 25 µL {transfer_word} with a {pipette_word} pipette: dilution "
@@ -439,6 +469,12 @@ def write_dilution_pdf(
                         f"12-sample dilution row -> its {rep_word} assay rows, see the "
                         "transfer table below."
                     )
+                    if reagent_blank_wells:
+                        step7 += (
+                            f" Note: wells {wr_col_range} of the dilution rows are empty, so those "
+                            f"assay wells receive no liquid; you may remove tips {wr_col_range} for "
+                            "this transfer."
+                        )
                 else:
                     step2 = (
                         f"2) Add diluent to sample columns 4-12 ({diluent_ul:g} µL/well) and "
@@ -574,10 +610,11 @@ def write_dilution_pdf(
         if standard_wells:
             total_diluent_ul = sum(w.diluent_ul for w in plate_wells)
             total_diluent_ml = round(total_diluent_ul * 1.1 / 1000, 1)
+            n_diluent_wells = len(plate_wells) - len(reagent_blank_wells)
             c.drawString(
                 MARGIN,
                 cursor,
-                f"Total diluent needed: {total_diluent_ml:.1f} mL (10% excess, {len(plate_wells)} wells); "
+                f"Total diluent needed: {total_diluent_ml:.1f} mL (10% excess, {n_diluent_wells} wells); "
                 f"BSA stock needed: {stock_volume_ul():g} µL",
             )
         else:
@@ -626,6 +663,9 @@ def write_dilution_pdf(
 
         cells: dict[str, tuple[str, str]] = {}
         for pw in plate_wells:
+            if pw.role == "reagent_blank":
+                # Left empty on the dilution plate (no diluent, no sample).
+                continue
             hexcolor = ROLE_FILL[pw.role]
             if pw.role == "standard":
                 text = str(int(pw.conc_ugml))

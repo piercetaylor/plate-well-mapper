@@ -146,6 +146,34 @@ def quantify(df: pd.DataFrame, model: str = "4pl", include_blank: bool = True) -
     return df
 
 
+def reagent_blank_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-plate reagent (WR-only) blank QC: mean/SD/n of reagent_blank absorbance,
+    the mean of buffer blanks, and the difference (buffer background = buffer blank
+    - WR only). Returns an empty DataFrame (with the expected columns) if there are
+    no reagent_blank rows.
+    """
+    columns = [
+        "plate",
+        "reagent_blank_mean",
+        "reagent_blank_sd",
+        "reagent_blank_n",
+        "buffer_blank_mean",
+        "buffer_background",
+    ]
+    reagent = df[df["role"] == "reagent_blank"]
+    if reagent.empty:
+        return pd.DataFrame(columns=columns)
+
+    buffer_means = df.loc[df["role"] == "blank"].groupby("plate")["absorbance"].mean()
+
+    grouped = reagent.groupby("plate")["absorbance"].agg(
+        reagent_blank_mean="mean", reagent_blank_sd=lambda s: s.std(ddof=1), reagent_blank_n="count"
+    )
+    grouped["buffer_blank_mean"] = grouped.index.map(buffer_means)
+    grouped["buffer_background"] = grouped["buffer_blank_mean"] - grouped["reagent_blank_mean"]
+    return grouped.reset_index()[columns]
+
+
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
     """Summarize sample replicates, one row per sample in plate order (S1, S2, ...)."""
     samples = df[df["role"] == "sample"].copy()

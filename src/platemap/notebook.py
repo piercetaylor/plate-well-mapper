@@ -30,6 +30,7 @@ def build_notebook(
         "    invert_linear,\n"
         "    load_mapped,\n"
         "    quantify,\n"
+        "    reagent_blank_summary,\n"
         "    subtract_blank,\n"
         "    summarize,\n"
         ")"
@@ -87,6 +88,14 @@ def build_notebook(
 
     summary_code = nbf.v4.new_code_cell("summary = summarize(df)\nsummary")
 
+    blank_qc_code = nbf.v4.new_code_cell(
+        "blank_qc = reagent_blank_summary(df)\n"
+        "if not blank_qc.empty:\n"
+        "    display(blank_qc)\n"
+        "else:\n"
+        "    print('no reagent (WR-only) blank wells in this layout')"
+    )
+
     export_code = nbf.v4.new_code_cell(
         "from pathlib import Path\n\n"
         "out_path = Path(OUTPUT_CSV)\n"
@@ -104,6 +113,7 @@ def build_notebook(
         plot_code,
         quantify_code,
         summary_code,
+        blank_qc_code,
         export_code,
     ]
 

@@ -30,6 +30,7 @@ def _mc_capacity(channels: int, replicates: int) -> int:
 ROLE_FILL = {
     "standard": "FFC000",
     "blank": "A6A6A6",
+    "reagent_blank": "E7E6E6",
     "sample": "9DC3E6",
 }
 
@@ -223,11 +224,28 @@ def _dilution_row_for_group(g: int) -> tuple[int, str]:
     return 2 + g2 // 8, ROWS_FULL[g2 % 8]
 
 
-def _build_layout_12ch(samples: list[Sample], replicates: int = 3) -> list[LayoutRow]:
+def validate_wr_only_blank_cols(wr_only_blank_cols: int, channels: int | None) -> None:
+    """Raise PlatemapError if wr_only_blank_cols is out of range or used without 12-channel mode."""
+    if wr_only_blank_cols == 0:
+        return
+    if not (0 <= wr_only_blank_cols <= 3):
+        raise PlatemapError(
+            f"--wr-only-blank-cols must be 0-3 (got {wr_only_blank_cols})"
+        )
+    if channels != 12:
+        raise PlatemapError("--wr-only-blank-cols is only supported with --channels 12")
+
+
+def _build_layout_12ch(
+    samples: list[Sample], replicates: int = 3, wr_only_blank_cols: int = 0
+) -> list[LayoutRow]:
     """Place standards (rows A/B), blanks (A9-A12/B9-B12), and samples (rows C-H) per plate.
 
     Every dilution sample row (12 distinct samples, one per column) is dispensed
     into `replicates` consecutive assay rows, same columns (12-channel pipette).
+
+    The last `wr_only_blank_cols` of the 4 blank columns (9-12) per row become
+    "reagent_blank" (WR only, no buffer) instead of "blank" (buffer + WR).
     """
     n = len(samples)
     n_dil_rows = math.ceil(n / 12) if n > 0 else 0
@@ -258,25 +276,48 @@ def _build_layout_12ch(samples: list[Sample], replicates: int = 3) -> list[Layou
                     )
                 )
 
+        wr_only_cols = set(range(13 - wr_only_blank_cols, 13)) if wr_only_blank_cols else set()
         blank_wells = [(r, c) for r in ("A", "B") for c in (9, 10, 11, 12)]
-        for i, (row_letter, col) in enumerate(blank_wells, start=1):
+        blank_rep = 0
+        wr_rep = 0
+        for row_letter, col in blank_wells:
             well = f"{row_letter}{col}"
-            rows_out.append(
-                LayoutRow(
-                    plate=plate,
-                    well=well,
-                    row=row_letter,
-                    col=col,
-                    role="blank",
-                    short_id="BLK",
-                    label="Blank",
-                    conc_ugml=0.0,
-                    sample_name=None,
-                    dilution_factor=None,
-                    replicate=i,
-                    notes="",
+            if col in wr_only_cols:
+                wr_rep += 1
+                rows_out.append(
+                    LayoutRow(
+                        plate=plate,
+                        well=well,
+                        row=row_letter,
+                        col=col,
+                        role="reagent_blank",
+                        short_id="WR",
+                        label="WR only (no buffer)",
+                        conc_ugml=None,
+                        sample_name=None,
+                        dilution_factor=None,
+                        replicate=wr_rep,
+                        notes="",
+                    )
                 )
-            )
+            else:
+                blank_rep += 1
+                rows_out.append(
+                    LayoutRow(
+                        plate=plate,
+                        well=well,
+                        row=row_letter,
+                        col=col,
+                        role="blank",
+                        short_id="BLK",
+                        label="Blank (buffer + WR)" if wr_only_blank_cols else "Blank",
+                        conc_ugml=0.0,
+                        sample_name=None,
+                        dilution_factor=None,
+                        replicate=blank_rep,
+                        notes="",
+                    )
+                )
 
         for slot in range(groups_per_plate):
             g = groups_per_plate * (plate - 1) + slot
@@ -318,15 +359,17 @@ def build_layout(
     multichannel: bool = False,
     channels: int | None = None,
     replicates: int = 3,
+    wr_only_blank_cols: int = 0,
 ) -> list[LayoutRow]:
     """Place standards and samples onto plates using the generic row-wise placer."""
     if channels is None and multichannel:
         channels = 8
+    validate_wr_only_blank_cols(wr_only_blank_cols, channels)
     if channels is not None:
         if avoid_edges:
             raise PlatemapError("--avoid-edges is not supported with --multichannel")
         if channels == 12:
-            return _build_layout_12ch(samples, replicates)
+            return _build_layout_12ch(samples, replicates, wr_only_blank_cols)
         return _build_layout_multichannel(samples, replicates)
 
     wells = usable_wells(avoid_edges)

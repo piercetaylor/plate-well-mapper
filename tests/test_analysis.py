@@ -9,6 +9,7 @@ from platemap.analysis import (
     invert_4pl,
     invert_linear,
     quantify,
+    reagent_blank_summary,
     subtract_blank,
     summarize,
 )
@@ -21,7 +22,7 @@ def _four_pl(x, a, b, c, d):
     return d + (a - d) / (1 + (x / c) ** b)
 
 
-def _synthetic_mapped_df(model="4pl"):
+def _synthetic_mapped_df(model="4pl", with_reagent_blank=False, reagent_blank_absorbance=None):
     rows = []
     for plate in (1,):
         for conc in CONCS:
@@ -65,6 +66,27 @@ def _synthetic_mapped_df(model="4pl"):
                         dilution_factor=1.0,
                         replicate=rep,
                         absorbance=absorbance,
+                    )
+                )
+        if with_reagent_blank:
+            wr_absorbance = (
+                reagent_blank_absorbance
+                if reagent_blank_absorbance is not None
+                else _four_pl(0.0, **TRUE_PARAMS) + 0.5
+            )
+            for rep, well in enumerate(("A11", "A12"), start=1):
+                rows.append(
+                    dict(
+                        plate=plate,
+                        well=well,
+                        role="reagent_blank",
+                        short_id="WR",
+                        label="WR only (no buffer)",
+                        conc_ugml=None,
+                        sample_name=None,
+                        dilution_factor=None,
+                        replicate=rep,
+                        absorbance=wr_absorbance,
                     )
                 )
     return pd.DataFrame(rows)
@@ -170,3 +192,54 @@ def test_uninvertible_reading_is_flagged_out_of_range():
     out = quantify(df, "4pl")
     row = out.loc[sample_rows[0]]
     assert np.isnan(row["conc_ugml_est"]) and bool(row["out_of_range"])
+
+
+def test_reagent_blank_summary_empty_when_none():
+    df = _synthetic_mapped_df()
+    out = reagent_blank_summary(df)
+    assert out.empty
+    assert list(out.columns) == [
+        "plate",
+        "reagent_blank_mean",
+        "reagent_blank_sd",
+        "reagent_blank_n",
+        "buffer_blank_mean",
+        "buffer_background",
+    ]
+
+
+def test_reagent_blank_summary_values():
+    df = _synthetic_mapped_df(with_reagent_blank=True, reagent_blank_absorbance=1.0)
+    blank_mean = df.loc[df.role == "blank", "absorbance"].mean()
+    out = reagent_blank_summary(df)
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["plate"] == 1
+    assert row["reagent_blank_mean"] == pytest.approx(1.0)
+    assert row["reagent_blank_sd"] == pytest.approx(0.0)
+    assert row["reagent_blank_n"] == 2
+    assert row["buffer_blank_mean"] == pytest.approx(blank_mean)
+    assert row["buffer_background"] == pytest.approx(blank_mean - 1.0)
+
+
+def test_subtract_blank_ignores_reagent_blank():
+    # Give the reagent (WR-only) blank a wildly different absorbance; blank
+    # subtraction (and therefore downstream results) must be unaffected.
+    df_no_wr = _synthetic_mapped_df()
+    df_with_wr = _synthetic_mapped_df(with_reagent_blank=True, reagent_blank_absorbance=99.0)
+
+    blanked_no_wr = subtract_blank(df_no_wr)
+    blanked_with_wr = subtract_blank(df_with_wr)
+
+    std_no_wr = blanked_no_wr.loc[blanked_no_wr.role == "standard", "abs_blanked"].reset_index(drop=True)
+    std_with_wr = blanked_with_wr.loc[blanked_with_wr.role == "standard", "abs_blanked"].reset_index(drop=True)
+    pd.testing.assert_series_equal(std_no_wr, std_with_wr)
+
+    quantified_no_wr = quantify(blanked_no_wr, "4pl")
+    quantified_with_wr = quantify(blanked_with_wr, "4pl")
+    summary_no_wr = summarize(quantified_no_wr)
+    summary_with_wr = summarize(quantified_with_wr)
+    pd.testing.assert_frame_equal(summary_no_wr, summary_with_wr)
+
+    # reagent_blank rows are excluded from the sample summary entirely.
+    assert not summary_with_wr["short_id"].isin(["WR"]).any()

@@ -42,6 +42,10 @@ usage: platemap layout [-h] [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
   stay duplicate in every mode; this only changes the sample group size
   (row-wise) or the sample lane width (multichannel modes; see
   "Multichannel mode" below).
+- `--wr-only-blank-cols N`: number (`0`-`3`, default `0`) of the 4 blank
+  columns (9-12, rows A/B) in `--channels 12` mode that become WR-only
+  reagent blanks instead of buffer blanks (see "Reagent (WR-only) blanks"
+  below). Only valid with `--channels 12`; otherwise a `PlatemapError`.
 - `--experiment EXPERIMENT`: experiment name, recorded on the Info sheet
   and the PDF header.
 - `--date DATE`: experiment date, `YYYY-MM-DD` (default: today). Rejected
@@ -167,6 +171,11 @@ usage: platemap dilute [-h] [--factor FACTOR] [--final-volume FINAL_VOLUME]
   Errors if combined with `--avoid-edges`.
 - `--replicates {2,3}`: sample replicate count (default `3`); see
   "Multichannel mode" below.
+- `--wr-only-blank-cols N`: number (`0`-`3`, default `0`) of the 4 blank
+  columns (9-12, rows A/B) in `--channels 12` mode that become WR-only
+  reagent blanks, left empty on the dilution plate (see "Reagent
+  (WR-only) blanks" below). Only valid with `--channels 12`; otherwise a
+  `PlatemapError`.
 
 Writes, in order:
 
@@ -338,6 +347,43 @@ contents) used by the dilution PDF (protocol steps: "row-to-row with a
 12-channel pipette" + a transfer table) and the assay plate map PDF
 (one "Multichannel: dil row X -> rows a,b" line per plate).
 
+#### Reagent (WR-only) blanks (`--wr-only-blank-cols N`)
+
+In `--channels 12` mode, `--wr-only-blank-cols N` (`N` = `0`-`3`,
+default `0`) turns the *last* `N` of the 4 blank columns (9-12, rows A
+and B) into a second, distinct blank type: a reagent (WR-only) blank,
+role `reagent_blank`, short id `WR`. For example `N=2` makes A11, A12,
+B11, B12 WR-only, leaving A9, A10, B9, B10 as ordinary buffer blanks
+(role `blank`, short id `BLK`):
+
+- **Buffer blanks** (`BLK`) get diluent on the dilution plate, are
+  carried over by the whole-row transfer, and get 200 µL Working
+  Reagent on the assay plate — unchanged from the `N=0` behavior. They
+  are used for blank subtraction (`subtract_blank`) and as the 0 µg/mL
+  standard-curve point.
+- **WR-only wells** (`WR`) are left *empty* on the dilution plate (no
+  diluent, no buffer) — the row transfer carries nothing into the
+  matching assay wells — and get only 200 µL Working Reagent directly
+  on the assay plate. They measure reagent background (WR + plate
+  contribution, no sample buffer) and are excluded from blank
+  subtraction, the standard-curve fit, and `summarize`; `platemap
+  analyze` reports them separately in `<prefix>_blank_qc.csv` via
+  `reagent_blank_summary` (per-plate reagent-blank mean/SD/n, the
+  buffer-blank mean, and their difference, `buffer_background = buffer
+  blank mean - reagent blank mean`) and marks the reagent-blank level as
+  a dotted line on the standard-curve PDF, when present.
+
+`--wr-only-blank-cols` is only valid with `--channels 12`; combining it
+with any other mode (including `N=0` implicitly with row-wise/8-channel
+modes) raises a `PlatemapError`. `N=0` (the default) is identical to
+the original single-blank-type behavior. The role round-trips through
+`<prefix>_layout.csv`/`<prefix>_dilution.csv`, so `platemap gen5-setup`
+run later from a saved layout CSV reproduces the same WR-only wells.
+Gen5 has no native "WR-only blank" concept, so the Gen5 setup sheet
+assigns these wells Gen5 well type "Assay Control" with ID `CTL1` (see
+"Gen5 setup sheet" below) — Gen5's own blank correction then uses only
+the `BLK` wells.
+
 ### Auto-generated protocol
 
 Both `platemap layout` and `platemap dilute` automatically write
@@ -373,7 +419,12 @@ line, assigned to SPL1, SPL2, ... in order. `platemap layout` and
   samples summary (SPL range, replicate count, orientation), and
   numbered Gen5 entry steps (create the protocol, place standards,
   enter concentrations, place blanks, place samples, save the protocol,
-  import Sample IDs, export results). Page 2 onward shows each plate's
+  import Sample IDs, export results). When the layout has reagent
+  (WR-only) blanks (`--wr-only-blank-cols`, see above), they are listed
+  separately as `CTL1 = WR only, no buffer; not used as blank -> wells
+  ...`, get Gen5 well type "Assay Control", and get their own entry step
+  (place the `CTL1` wells) so Gen5's blank correction only sees the
+  `BLK` wells. Page 2 onward shows each plate's
   *actual* contents (Gen5 id + our S# + sample name) to confirm against
   the saved protocol, plus a note listing any wells the protocol labels
   `SPL` that are empty on that plate (fewer samples than the plate the
@@ -468,7 +519,14 @@ Writes:
   (JSON), r2, n_points, include_blank`.
 - `<prefix>_standard_curves.pdf`: one page per plate, standard means and
   replicates, the fitted curve, and sample absorbances plotted at their
-  estimated concentration, titled with the model and R².
+  estimated concentration, titled with the model and R². Also marks the
+  reagent (WR-only) blank level as a dotted line, per plate, when the
+  mapped CSV has `reagent_blank` rows (see "Reagent (WR-only) blanks"
+  above).
+- `<prefix>_blank_qc.csv`: only written when the mapped CSV has
+  `reagent_blank` rows — one row per plate from `reagent_blank_summary`
+  (`plate, reagent_blank_mean, reagent_blank_sd, reagent_blank_n,
+  buffer_blank_mean, buffer_background`), also printed to stdout.
 
 Prints, per plate, `model`, `params`, and `r2`; then a total
 `samples: in_range=<N> out_of_range=<N>` count; then the four output
@@ -695,6 +753,15 @@ notebook --no-blank-in-fit`, `platemap analyze --no-blank-in-fit`, or
 set `INCLUDE_BLANK_IN_FIT = False` in the notebook) to fit only the
 nonzero standards; blank subtraction (`abs_blanked`) still happens
 either way.
+
+In `--channels 12` mode, `--wr-only-blank-cols N` (see "Reagent
+(WR-only) blanks" above) offers a more direct alternative to
+`--no-blank-in-fit`: it runs *both* a buffer blank (diluent + WR, used
+for blank subtraction and the 0 µg/mL curve point, same as `BLK` today)
+and a WR-only well side by side on the same plate, so you get the
+proper diluent-matched blank for the fit *and* a measurement of the
+reagent-only background, reported in `<prefix>_blank_qc.csv` — no
+`--no-blank-in-fit` needed.
 
 ## Troubleshooting
 

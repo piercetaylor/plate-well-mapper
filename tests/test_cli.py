@@ -135,7 +135,7 @@ def test_read_real_gen5_format_end_to_end(tmp_path, capsys):
     assert b7_blank["plate_number"] == "Plate 2"
 
 
-def _write_analyze_mapped_csv(path, blank_abs=0.1):
+def _write_analyze_mapped_csv(path, blank_abs=0.1, reagent_blank_abs=None):
     import csv
 
     concs = [2000, 1500, 1000, 750, 500, 250, 125, 25]
@@ -171,6 +171,22 @@ def _write_analyze_mapped_csv(path, blank_abs=0.1):
                 absorbance=blank_abs,
             )
         )
+    if reagent_blank_abs is not None:
+        for rep in (1, 2):
+            rows.append(
+                dict(
+                    plate=1,
+                    well=f"D{rep}",
+                    role="reagent_blank",
+                    short_id="WR",
+                    label="WR only (no buffer)",
+                    conc_ugml="",
+                    sample_name="",
+                    dilution_factor="",
+                    replicate=rep,
+                    absorbance=reagent_blank_abs,
+                )
+            )
     true_conc = 250.0
     for rep in (1, 2, 3):
         rows.append(
@@ -231,6 +247,39 @@ def test_analyze_include_blank_vs_no_blank_in_fit(tmp_path):
     assert (outdir_without / "demo_results_wells.csv").exists()
     assert (outdir_without / "demo_curve_fits.csv").exists()
     assert (outdir_without / "demo_standard_curves.pdf").exists()
+
+
+def test_analyze_writes_blank_qc_when_reagent_blank_present(tmp_path, capsys):
+    import csv
+
+    mapped_csv = tmp_path / "demo_plates_mapped.csv"
+    _write_analyze_mapped_csv(mapped_csv, blank_abs=0.1, reagent_blank_abs=0.9)
+
+    outdir = tmp_path / "out"
+    rc = main(["analyze", str(mapped_csv), "--model", "linear", "-o", str(outdir)])
+    assert rc == 0
+
+    blank_qc_path = outdir / "demo_blank_qc.csv"
+    assert blank_qc_path.exists()
+    with open(blank_qc_path, newline="", encoding="utf-8") as fh:
+        row = next(csv.DictReader(fh))
+    assert float(row["reagent_blank_mean"]) == pytest.approx(0.9)
+    assert float(row["buffer_blank_mean"]) == pytest.approx(0.1)
+    assert float(row["buffer_background"]) == pytest.approx(0.1 - 0.9)
+
+    out = capsys.readouterr().out
+    assert "reagent_blank mean=" in out
+    assert str(blank_qc_path) in out
+
+
+def test_analyze_no_blank_qc_file_when_no_reagent_blank(tmp_path):
+    mapped_csv = tmp_path / "demo_plates_mapped.csv"
+    _write_analyze_mapped_csv(mapped_csv, blank_abs=0.1)
+
+    outdir = tmp_path / "out"
+    rc = main(["analyze", str(mapped_csv), "--model", "linear", "-o", str(outdir)])
+    assert rc == 0
+    assert not (outdir / "demo_blank_qc.csv").exists()
 
 
 def test_read_plate_number_mismatch_is_error(tmp_path, capsys):
@@ -396,6 +445,71 @@ def test_dilute_12channel_replicates2_writes_all_files_incl_protocol(tmp_path, c
 
     out = capsys.readouterr().out
     assert "assay_plates=2" in out
+
+
+def test_dilute_12channel_wr_only_blank_cols_writes_files(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=60)
+    outdir = tmp_path / "out"
+    rc = main(
+        [
+            "dilute",
+            samples_path,
+            "-o",
+            str(outdir),
+            "--prefix",
+            "wr",
+            "--channels",
+            "12",
+            "--replicates",
+            "2",
+            "--factor",
+            "5",
+            "--final-volume",
+            "100",
+            "--wr-only-blank-cols",
+            "2",
+        ]
+    )
+    assert rc == 0
+
+    expected = [
+        "wr_samples_diluted.csv",
+        "wr_dilution.csv",
+        "wr_dilution.pdf",
+        "wr_layout.csv",
+        "wr_plates.xlsx",
+        "wr_platemap.pdf",
+        "wr_bca_analysis.ipynb",
+        "wr_protocol.md",
+        "wr_protocol.pdf",
+        "wr_gen5_setup.pdf",
+        "wr_gen5_layout.csv",
+    ]
+    for name in expected:
+        assert (outdir / name).exists(), name
+
+    layout_csv = (outdir / "wr_layout.csv").read_text(encoding="utf-8")
+    assert "reagent_blank" in layout_csv
+    dilution_csv = (outdir / "wr_dilution.csv").read_text(encoding="utf-8")
+    assert "reagent_blank" in dilution_csv
+
+
+def test_layout_wr_only_blank_cols_without_channels_12_errors(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["layout", samples_path, "-o", str(outdir), "--wr-only-blank-cols", "1"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
+
+
+def test_dilute_wr_only_blank_cols_without_channels_12_errors(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["dilute", samples_path, "-o", str(outdir), "--wr-only-blank-cols", "1"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:")
 
 
 def test_layout_avoid_edges_and_multichannel_errors(tmp_path, capsys):

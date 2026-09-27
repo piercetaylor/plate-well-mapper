@@ -25,6 +25,10 @@ def _rows_12ch_60():
     return build_layout(_samples(60), channels=12, replicates=2)
 
 
+def _rows_12ch_60_wr2():
+    return build_layout(_samples(60), channels=12, replicates=2, wr_only_blank_cols=2)
+
+
 def test_gen5_assignments_standards_and_blanks():
     rows = _rows_12ch_60()
     a = _by_plate_well(gen5_assignments(rows))
@@ -87,6 +91,50 @@ def test_gen5_protocol_layout_has_36_spl_and_uses_plate1():
     assert all(a["plate"] == 1 for a in protocol)
     spl_ids = {a["gen5_id"] for a in protocol if a["gen5_type"] == "Sample"}
     assert len(spl_ids) == 36
+
+
+def test_gen5_assignments_reagent_blank_is_ctl1():
+    rows = _rows_12ch_60_wr2()
+    a = _by_plate_well(gen5_assignments(rows))
+
+    for plate in (1, 2):
+        for well in ("A11", "A12", "B11", "B12"):
+            entry = a[(plate, well)]
+            assert entry["gen5_type"] == "Assay Control"
+            assert entry["gen5_id"] == "CTL1"
+        for well in ("A9", "A10", "B9", "B10"):
+            assert a[(plate, well)]["gen5_type"] == "Blank"
+            assert a[(plate, well)]["gen5_id"] == "BLK"
+
+
+def test_gen5_setup_pdf_and_layout_csv_wr_only(tmp_path):
+    rows = _rows_12ch_60_wr2()
+    pdf_path = tmp_path / "demo_gen5_setup.pdf"
+    n_pages = write_gen5_setup_pdf(rows, str(pdf_path), experiment="Exp", date="2026-01-01")
+    assert pdf_path.exists()
+    assert n_pages == 3
+
+    csv_path = tmp_path / "demo_gen5_layout.csv"
+    write_gen5_layout_csv(rows, str(csv_path))
+    content = csv_path.read_text(encoding="utf-8")
+    assert "Assay Control,CTL1" in content
+
+
+def test_gen5_setup_from_layout_csv_round_trip_wr_only(tmp_path):
+    rows = _rows_12ch_60_wr2()
+    csv_path = tmp_path / "demo_layout.csv"
+    write_layout_csv(rows, str(csv_path))
+
+    read_rows = read_layout_csv(str(csv_path))
+    assert len(read_rows) == len(rows)
+
+    for plate in (1, 2):
+        plate_rows = [r for r in read_rows if r.plate == plate]
+        layout = {a["well"]: (a["gen5_id"], "" if a["conc"] is None else str(a["conc"]))
+                  for a in gen5_assignments(read_rows) if a["plate"] == plate}
+        errors, warnings = check_gen5_layout(plate_rows, layout)
+        assert errors == []
+        assert warnings == []
 
 
 def test_protocol_missing_wells_plate2():

@@ -195,6 +195,25 @@ def test_check_gen5_layout_extra_in_gen5_is_warning():
     assert len(warnings) == 1
 
 
+def test_check_gen5_layout_reagent_blank_accepts_ctl_or_empty():
+    rows = [
+        _row("A11", "reagent_blank", "WR"),
+        _row("A12", "reagent_blank", "WR"),
+    ]
+    layout = {"A11": ("CTL1", ""), "A12": ("", "")}
+    errors, warnings = check_gen5_layout(rows, layout)
+    assert errors == []
+    assert warnings == []
+
+
+def test_check_gen5_layout_reagent_blank_wrong_id_is_error():
+    rows = [_row("A11", "reagent_blank", "WR")]
+    layout = {"A11": ("SPL1", "")}
+    errors, warnings = check_gen5_layout(rows, layout)
+    assert len(errors) == 1
+    assert "A11" in errors[0]
+
+
 def test_wavelength_matches_read_label(tmp_path):
     header = "," + ",".join(str(c) for c in range(1, 13))
     body = "\n".join(r + "," + ",".join(["0.5"] * 12) for r in "ABCDEFGH")

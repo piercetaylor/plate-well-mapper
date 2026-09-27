@@ -67,6 +67,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default=3,
         help="sample replicate count (default: 3); standards stay duplicate",
     )
+    layout_p.add_argument(
+        "--wr-only-blank-cols",
+        type=int,
+        default=0,
+        metavar="N",
+        help="number (0-3) of the 4 blank columns (9-12, rows A/B) in --channels 12 mode "
+        "that become WR-only reagent blanks (no buffer); only valid with --channels 12 "
+        "(default: 0)",
+    )
     layout_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     layout_p.add_argument(
         "--date",
@@ -135,6 +144,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=(2, 3),
         default=3,
         help="sample replicate count (default: 3); standards stay duplicate",
+    )
+    dilute_p.add_argument(
+        "--wr-only-blank-cols",
+        type=int,
+        default=0,
+        metavar="N",
+        help="number (0-3) of the 4 blank columns (9-12, rows A/B) in --channels 12 mode "
+        "that become WR-only reagent blanks (no buffer, left empty on the dilution plate); "
+        "only valid with --channels 12 (default: 0)",
     )
     dilute_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     dilute_p.add_argument(
@@ -219,6 +237,7 @@ def _write_layout_outputs(
     transfer_lines: dict[int, list[str]] | None = None,
     channels: int | None = None,
     replicates: int = 3,
+    wr_only_blank_cols: int = 0,
 ) -> tuple[Path, Path, Path, list, list[Path]]:
     """Build a layout from samples and write its CSV, workbook, PDF, and Gen5 setup files.
 
@@ -231,7 +250,12 @@ def _write_layout_outputs(
     from platemap.pdf import write_pdf
 
     rows = build_layout(
-        samples, avoid_edges=avoid_edges, multichannel=multichannel, channels=channels, replicates=replicates
+        samples,
+        avoid_edges=avoid_edges,
+        multichannel=multichannel,
+        channels=channels,
+        replicates=replicates,
+        wr_only_blank_cols=wr_only_blank_cols,
     )
 
     csv_path = outdir / f"{prefix}_layout.csv"
@@ -275,6 +299,7 @@ def _run_layout(args: argparse.Namespace) -> int:
         multichannel,
         channels=channels,
         replicates=args.replicates,
+        wr_only_blank_cols=args.wr_only_blank_cols,
     )
 
     n = len(samples)
@@ -333,7 +358,13 @@ def _run_dilute(args: argparse.Namespace) -> int:
     multichannel = channels is not None
     plan = make_plan(factor=args.factor, final_volume_ul=args.final_volume)
     diluted = apply_dilution(samples, plan.factor)
-    dilution_wells = build_dilution_layout(samples, plan, multichannel=multichannel, channels=channels)
+    dilution_wells = build_dilution_layout(
+        samples,
+        plan,
+        multichannel=multichannel,
+        channels=channels,
+        wr_only_blank_cols=args.wr_only_blank_cols,
+    )
 
     n = len(samples)
     assay_plates = n_plates(n, args.avoid_edges, multichannel, channels, args.replicates)
@@ -377,6 +408,7 @@ def _run_dilute(args: argparse.Namespace) -> int:
     layout_csv_path, xlsx_path, pdf_path, rows, gen5_paths = _write_layout_outputs(
         diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date,
         multichannel, transfer_lines, channels=channels, replicates=args.replicates,
+        wr_only_blank_cols=args.wr_only_blank_cols,
     )
 
     notebook_path = outdir / f"{args.prefix}_bca_analysis.ipynb"
@@ -639,14 +671,18 @@ def _run_analyze(args: argparse.Namespace) -> int:
     fits = analysis.fit_standards(df, args.model, include_blank)
     df = analysis.quantify(df, args.model, include_blank)
     summary = analysis.summarize(df)
+    blank_qc = analysis.reagent_blank_summary(df)
 
     results_path = outdir / f"{prefix}_results.csv"
     wells_path = outdir / f"{prefix}_results_wells.csv"
     fits_path = outdir / f"{prefix}_curve_fits.csv"
     pdf_path = outdir / f"{prefix}_standard_curves.pdf"
+    blank_qc_path = outdir / f"{prefix}_blank_qc.csv"
 
     summary.to_csv(results_path, index=False)
     df.to_csv(wells_path, index=False)
+    if not blank_qc.empty:
+        blank_qc.to_csv(blank_qc_path, index=False)
 
     plates = sorted(fits)
     with open(fits_path, "w", encoding="utf-8", newline="") as fh:
@@ -685,6 +721,13 @@ def _run_analyze(args: argparse.Namespace) -> int:
                     samples["conc_ugml_est"], samples["abs_blanked"], marker="x", color="red", label="samples"
                 )
 
+            if not blank_qc.empty and plate in set(blank_qc["plate"]):
+                qc_row = blank_qc[blank_qc["plate"] == plate].iloc[0]
+                reagent_blank_level = qc_row["reagent_blank_mean"] - qc_row["buffer_blank_mean"]
+                ax.axhline(
+                    reagent_blank_level, ls=":", color="grey", label="reagent blank (WR only)"
+                )
+
             ax.set_title(f"Plate {plate}: {fit.model} fit, R²={fit.r2:.4f}")
             ax.set_xlabel("Concentration (µg/mL)")
             ax.set_ylabel("Blanked absorbance")
@@ -701,10 +744,21 @@ def _run_analyze(args: argparse.Namespace) -> int:
     out_range = int(samples_all["out_of_range"].sum())
     print(f"samples: in_range={in_range} out_of_range={out_range}")
 
+    if not blank_qc.empty:
+        for _, row in blank_qc.iterrows():
+            print(
+                f"plate {int(row['plate'])}: reagent_blank mean={row['reagent_blank_mean']:.4f} "
+                f"sd={row['reagent_blank_sd']:.4f} n={int(row['reagent_blank_n'])} "
+                f"buffer_blank_mean={row['buffer_blank_mean']:.4f} "
+                f"buffer_background={row['buffer_background']:.4f}"
+            )
+
     print(results_path)
     print(wells_path)
     print(fits_path)
     print(pdf_path)
+    if not blank_qc.empty:
+        print(blank_qc_path)
     return 0
 
 

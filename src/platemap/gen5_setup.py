@@ -38,7 +38,12 @@ GEN5_LAYOUT_COLUMNS = (
     "replicate",
 )
 
-_ROLE_TO_GEN5_TYPE = {"standard": "Standard", "blank": "Blank", "sample": "Sample"}
+_ROLE_TO_GEN5_TYPE = {
+    "standard": "Standard",
+    "blank": "Blank",
+    "reagent_blank": "Assay Control",
+    "sample": "Sample",
+}
 
 
 def _short_id_num(short_id: str) -> int | None:
@@ -86,6 +91,8 @@ def gen5_assignments(rows: list[LayoutRow]) -> list[dict]:
                 conc = r.conc_ugml
             elif r.role == "blank":
                 gen5_id = "BLK"
+            elif r.role == "reagent_blank":
+                gen5_id = "CTL1"
             else:
                 gen5_id = f"SPL{rank[r.short_id]}"
 
@@ -410,12 +417,17 @@ def write_gen5_setup_pdf(rows: list[LayoutRow], path: str, experiment: str = "",
 
     cells: dict[str, tuple[str, list[str]]] = {}
     for a in protocol:
-        hexcolor = ROLE_FILL[a["gen5_type"].lower()] if a["gen5_type"].lower() in ROLE_FILL else ROLE_FILL["sample"]
         if a["gen5_type"] == "Standard":
+            hexcolor = ROLE_FILL["standard"]
             lines = [a["gen5_id"], _conc_text(a["conc"])]
         elif a["gen5_type"] == "Blank":
+            hexcolor = ROLE_FILL["blank"]
             lines = ["BLK"]
+        elif a["gen5_type"] == "Assay Control":
+            hexcolor = ROLE_FILL["reagent_blank"]
+            lines = ["CTL1"]
         else:
+            hexcolor = ROLE_FILL["sample"]
             lines = [a["gen5_id"]]
         cells[a["well"]] = (hexcolor, lines)
 
@@ -447,6 +459,23 @@ def write_gen5_setup_pdf(rows: list[LayoutRow], path: str, experiment: str = "",
     c.drawString(MARGIN, cursor, f"BLK → wells {', '.join(blank_wells)}" if blank_wells else "BLK: none")
     cursor -= 15
 
+    # ---- reagent (WR-only) control wells ------------------------------------
+    ctl_wells = sorted(
+        (a["well"] for a in protocol if a["gen5_type"] == "Assay Control"),
+        key=lambda w: (ROWS_FULL.index(w[0]), int(w[1:])),
+    )
+    if ctl_wells:
+        c.setFont("Helvetica-Bold", 8.5)
+        c.drawString(MARGIN, cursor, "Reagent (WR-only) controls")
+        cursor -= 11
+        c.setFont("Helvetica", 7.5)
+        c.drawString(
+            MARGIN,
+            cursor,
+            f"CTL1 = WR only, no buffer; not used as blank → wells {', '.join(ctl_wells)}",
+        )
+        cursor -= 15
+
     # ---- samples summary -----------------------------------------------
     first_spl = min(spl_wells) if spl_wells else 0
     last_spl = max(spl_wells) if spl_wells else 0
@@ -473,6 +502,14 @@ def write_gen5_setup_pdf(rows: list[LayoutRow], path: str, experiment: str = "",
         "Enter the concentrations (µg/mL) in the standards concentration table exactly "
         "as listed above.",
         "Well type Blank: select the blank wells listed above.",
+    ]
+    if ctl_wells:
+        steps.append(
+            'Well type Assay Control, ID "CTL1": select the reagent (WR-only) control wells '
+            "listed above; Gen5's own blank correction uses only the Blank wells, so CTL1 "
+            "wells are not treated as blanks."
+        )
+    steps += [
         f'Well type Sample, ID "SPL", replicates = {replicates}, direction = '
         f"{sample_orientation}, auto-numbering; place SPL1..SPL{last_spl} by dragging along "
         "the rows/columns in the order shown in the matrix above.",
@@ -520,13 +557,17 @@ def write_gen5_setup_pdf(rows: list[LayoutRow], path: str, experiment: str = "",
 
         cells = {}
         for a in plate_assignments:
-            gen5_type_lower = a["gen5_type"].lower()
-            hexcolor = ROLE_FILL.get(gen5_type_lower, ROLE_FILL["sample"])
             if a["gen5_type"] == "Standard":
+                hexcolor = ROLE_FILL["standard"]
                 lines = [a["gen5_id"], _conc_text(a["conc"])]
             elif a["gen5_type"] == "Blank":
+                hexcolor = ROLE_FILL["blank"]
                 lines = ["BLK"]
+            elif a["gen5_type"] == "Assay Control":
+                hexcolor = ROLE_FILL["reagent_blank"]
+                lines = ["CTL1"]
             else:
+                hexcolor = ROLE_FILL["sample"]
                 name = _truncate(a["sample_name"] or "", 10)
                 lines = [a["gen5_id"], a["short_id"], name]
             cells[a["well"]] = (hexcolor, lines)

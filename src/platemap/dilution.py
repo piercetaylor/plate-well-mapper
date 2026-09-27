@@ -4,6 +4,7 @@ import csv
 import math
 from dataclasses import dataclass, replace
 
+from platemap.layout import validate_wr_only_blank_cols
 from platemap.samples import PlatemapError, Sample
 from platemap.wells import ROWS_FULL, usable_wells
 
@@ -362,8 +363,14 @@ def _build_dilution_layout_mc(samples: list[Sample], plan: DilutionPlan) -> list
     return wells_out
 
 
-def _build_dilution_layout_12ch(samples: list[Sample], plan: DilutionPlan) -> list[DilutionWell]:
-    """12-channel dilution plate 1: row A/B = standards, blanks A9-A12/B9-B12, rows C-H = samples."""
+def _build_dilution_layout_12ch(
+    samples: list[Sample], plan: DilutionPlan, wr_only_blank_cols: int = 0
+) -> list[DilutionWell]:
+    """12-channel dilution plate 1: row A/B = standards, blanks A9-A12/B9-B12, rows C-H = samples.
+
+    The last `wr_only_blank_cols` blank columns (9-12) are left empty (reagent_blank,
+    no diluent) so the whole-row transfer carries nothing into those assay wells.
+    """
     wells_out: list[DilutionWell] = []
 
     conc_wells: dict[float, tuple[str, str]] = {}
@@ -397,23 +404,41 @@ def _build_dilution_layout_12ch(samples: list[Sample], plan: DilutionPlan) -> li
 
     blank_source, blank_source_ul, blank_diluent_ul = STANDARD_PREP[0]
     blank_remaining_ul = standard_remaining_ul(0)
+    wr_only_cols = set(range(13 - wr_only_blank_cols, 13)) if wr_only_blank_cols else set()
     for row_letter in ("A", "B"):
         for col in (9, 10, 11, 12):
-            wells_out.append(
-                DilutionWell(
-                    plate=1,
-                    well=f"{row_letter}{col}",
-                    role="blank",
-                    short_id="BLK",
-                    label="Blank",
-                    conc_ugml=0.0,
-                    source=blank_source,
-                    source_ul=float(blank_source_ul),
-                    diluent_ul=float(blank_diluent_ul),
-                    final_ul=STANDARD_FINAL_UL,
-                    remaining_ul=blank_remaining_ul,
+            if col in wr_only_cols:
+                wells_out.append(
+                    DilutionWell(
+                        plate=1,
+                        well=f"{row_letter}{col}",
+                        role="reagent_blank",
+                        short_id="WR",
+                        label="WR only (no buffer)",
+                        conc_ugml=None,
+                        source="",
+                        source_ul=0.0,
+                        diluent_ul=0.0,
+                        final_ul=0.0,
+                        remaining_ul=0.0,
+                    )
                 )
-            )
+            else:
+                wells_out.append(
+                    DilutionWell(
+                        plate=1,
+                        well=f"{row_letter}{col}",
+                        role="blank",
+                        short_id="BLK",
+                        label="Blank",
+                        conc_ugml=0.0,
+                        source=blank_source,
+                        source_ul=float(blank_source_ul),
+                        diluent_ul=float(blank_diluent_ul),
+                        final_ul=STANDARD_FINAL_UL,
+                        remaining_ul=blank_remaining_ul,
+                    )
+                )
 
     for i, samp in enumerate(samples, start=1):
         plate, well = _sample_plate_well_12(i - 1)
@@ -441,12 +466,14 @@ def build_dilution_layout(
     plan: DilutionPlan,
     multichannel: bool = False,
     channels: int | None = None,
+    wr_only_blank_cols: int = 0,
 ) -> list[DilutionWell]:
     """Build dilution plate 1 (BSA standards + blank + samples) plus any overflow sample plates."""
     if channels is None and multichannel:
         channels = 8
+    validate_wr_only_blank_cols(wr_only_blank_cols, channels)
     if channels == 12:
-        return _build_dilution_layout_12ch(samples, plan)
+        return _build_dilution_layout_12ch(samples, plan, wr_only_blank_cols)
     if channels == 8:
         return _build_dilution_layout_mc(samples, plan)
 

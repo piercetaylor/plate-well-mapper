@@ -318,6 +318,64 @@ def test_12ch_transfer_map_plate2():
     assert (1, "G", ("E", "F")) in {(e[1], e[2], e[3]) for e in samples}
 
 
+def test_12ch_dilution_layout_wr_only_blank_cols_2():
+    samples = _samples(60)
+    plan = make_plan()
+    wells = build_dilution_layout(samples, plan, channels=12, wr_only_blank_cols=2)
+    by_well = {w.well: w for w in wells}
+
+    for row in ("A", "B"):
+        for col in (9, 10):
+            w = by_well[f"{row}{col}"]
+            assert w.role == "blank"
+            assert w.diluent_ul == 200.0
+        for col in (11, 12):
+            w = by_well[f"{row}{col}"]
+            assert w.role == "reagent_blank"
+            assert w.short_id == "WR"
+            assert w.diluent_ul == 0.0
+            assert w.source_ul == 0.0
+            assert w.final_ul == 0.0
+            assert w.remaining_ul == 0.0
+
+    total_diluent_n0 = sum(w.diluent_ul for w in build_dilution_layout(samples, plan, channels=12))
+    total_diluent_n2 = sum(w.diluent_ul for w in wells)
+    assert total_diluent_n2 < total_diluent_n0
+    assert total_diluent_n0 - total_diluent_n2 == 4 * 200.0
+
+
+def test_wr_only_blank_cols_requires_channels_12():
+    samples = _samples(1)
+    plan = make_plan()
+    with pytest.raises(PlatemapError):
+        build_dilution_layout(samples, plan, wr_only_blank_cols=1)
+    with pytest.raises(PlatemapError):
+        build_dilution_layout(samples, plan, channels=8, wr_only_blank_cols=1)
+
+
+def test_wr_only_blank_cols_out_of_range():
+    samples = _samples(1)
+    plan = make_plan()
+    with pytest.raises(PlatemapError):
+        build_dilution_layout(samples, plan, channels=12, wr_only_blank_cols=4)
+
+
+def test_write_dilution_csv_marks_reagent_blank(tmp_path):
+    samples = _samples(60)
+    plan = make_plan()
+    wells = build_dilution_layout(samples, plan, channels=12, wr_only_blank_cols=2)
+    path = tmp_path / "dilution.csv"
+    write_dilution_csv(wells, str(path))
+
+    with open(path, encoding="utf-8") as fh:
+        content = fh.read()
+    assert "reagent_blank" in content
+    lines = [line for line in content.splitlines() if ",A11," in line]
+    assert len(lines) == 1
+    assert lines[0].split(",")[2] == "reagent_blank"
+    assert lines[0].split(",")[7] == "0.0"  # diluent_ul
+
+
 def test_write_dilution_pdf_with_low_remaining_warnings(tmp_path):
     # 105 samples -> 5 assay plates -> standard_prep_warnings(5) is non-empty.
     samples = _samples(105)

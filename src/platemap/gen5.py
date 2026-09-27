@@ -338,6 +338,14 @@ def check_gen5_layout(
                 warnings.append(f"{well}: empty in ours but Gen5 has '{gen5_id}'")
             continue
 
+        if our_row.role == "reagent_blank":
+            # Accepts Gen5 "CTL..." (Assay Control) or empty; no blank correction impact.
+            if gen5_id and not gen5_id.startswith("CTL"):
+                errors.append(
+                    f"{well}: expected Gen5 id 'CTL...' or empty (WR-only), got '{gen5_id}'"
+                )
+            continue
+
         if not gen5_id:
             errors.append(f"{well}: '{our_row.short_id}' in ours but empty in Gen5")
             continue

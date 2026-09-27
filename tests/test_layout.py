@@ -1,6 +1,6 @@
 import pytest
 
-from platemap.layout import build_layout, capacity, n_plates
+from platemap.layout import build_layout, capacity, n_plates, read_layout_csv, write_layout_csv
 from platemap.samples import PlatemapError, Sample
 
 
@@ -197,3 +197,57 @@ def test_12ch_replicates2_60_samples():
     sample_counts = Counter(r.short_id for r in rows if r.role == "sample")
     assert all(c == 2 for c in sample_counts.values())
     assert len(sample_counts) == 60
+
+
+def test_wr_only_blank_cols_requires_channels_12():
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), wr_only_blank_cols=1)
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), channels=8, wr_only_blank_cols=1)
+
+
+def test_wr_only_blank_cols_out_of_range():
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), channels=12, wr_only_blank_cols=4)
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), channels=12, wr_only_blank_cols=-1)
+
+
+def test_wr_only_blank_cols_zero_identical_to_default():
+    rows_default = build_layout(_samples(60), channels=12, replicates=2)
+    rows_explicit0 = build_layout(_samples(60), channels=12, replicates=2, wr_only_blank_cols=0)
+    assert rows_default == rows_explicit0
+
+
+def test_12ch_wr_only_blank_cols_2():
+    rows = build_layout(_samples(60), channels=12, replicates=2, wr_only_blank_cols=2)
+    by = {(r.plate, r.well): r for r in rows}
+
+    for plate in (1, 2):
+        assert by[(plate, "A9")].role == "blank"
+        assert by[(plate, "A10")].role == "blank"
+        assert by[(plate, "A11")].role == "reagent_blank"
+        assert by[(plate, "A12")].role == "reagent_blank"
+        assert by[(plate, "B9")].role == "blank"
+        assert by[(plate, "B10")].role == "blank"
+        assert by[(plate, "B11")].role == "reagent_blank"
+        assert by[(plate, "B12")].role == "reagent_blank"
+
+        assert by[(plate, "A11")].short_id == "WR"
+        assert by[(plate, "A11")].label == "WR only (no buffer)"
+        assert by[(plate, "A11")].conc_ugml is None
+        assert by[(plate, "A9")].label == "Blank (buffer + WR)"
+
+
+def test_wr_only_blank_cols_layout_csv_round_trip(tmp_path):
+    rows = build_layout(_samples(60), channels=12, replicates=2, wr_only_blank_cols=2)
+    csv_path = tmp_path / "layout.csv"
+    write_layout_csv(rows, str(csv_path))
+    read_rows = read_layout_csv(str(csv_path))
+
+    assert len(read_rows) == len(rows)
+    by = {(r.plate, r.well): r for r in read_rows}
+    assert by[(1, "A11")].role == "reagent_blank"
+    assert by[(1, "A11")].short_id == "WR"
+    assert by[(1, "A11")].conc_ugml is None
+    assert by[(1, "A9")].role == "blank"

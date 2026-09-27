@@ -104,6 +104,71 @@ def test_build_protocol_multichannel_layout_only(tmp_path):
     assert md_path.exists()
 
 
+def test_build_protocol_12ch_wr_only_blank_cols(tmp_path):
+    samples = _samples(60)
+    plan = make_plan(factor=5, final_volume_ul=100)
+    wells = build_dilution_layout(samples, plan, channels=12, wr_only_blank_cols=2)
+    rows = build_layout(samples, channels=12, replicates=2, wr_only_blank_cols=2)
+    doc = build_protocol(
+        experiment="WR",
+        date="2026-01-01",
+        samples=samples,
+        layout_rows=rows,
+        multichannel=True,
+        channels=12,
+        replicates=2,
+        plan=plan,
+        dilution_wells=wells,
+        n_assay_plates=2,
+        standards_warnings=standard_prep_warnings(2),
+        file_names={"prefix": "wr", "workbook": "wr_plates.xlsx"},
+    )
+    md_path = tmp_path / "protocol.md"
+    pdf_path = tmp_path / "protocol.pdf"
+    write_protocol_md(doc, str(md_path))
+    n_pages = write_protocol_pdf(doc, str(pdf_path))
+    assert n_pages >= 1
+
+    text = md_path.read_text(encoding="utf-8")
+    assert "WR-only wells (A11, A12, B11, B12)" in text
+    assert "buffer blank wells (A9, A10, B9, B10)" in text
+    assert "you may remove tips 11–12 for this transfer" in text
+    assert "including the WR-only wells A11, A12, B11, B12" in text
+    assert "imidazole" in text
+    assert "At dilution factor 5, a sample buffer with 250 mM imidazole gives 50 mM" in text
+    assert "At dilution factor 5, a sample buffer with 300 mM imidazole gives 60 mM" in text
+    assert "above the tolerated limit" in text
+    assert "<prefix>_blank_qc.csv" in text
+
+
+def test_build_protocol_no_wr_only_matches_baseline_wording(tmp_path):
+    samples = _samples(60)
+    plan = make_plan(factor=5, final_volume_ul=100)
+    wells = build_dilution_layout(samples, plan, channels=12, wr_only_blank_cols=0)
+    rows = build_layout(samples, channels=12, replicates=2, wr_only_blank_cols=0)
+    doc = build_protocol(
+        experiment="NoWR",
+        date="2026-01-01",
+        samples=samples,
+        layout_rows=rows,
+        multichannel=True,
+        channels=12,
+        replicates=2,
+        plan=plan,
+        dilution_wells=wells,
+        n_assay_plates=2,
+        standards_warnings=standard_prep_warnings(2),
+        file_names={"prefix": "nowr", "workbook": "nowr_plates.xlsx"},
+    )
+    md_path = tmp_path / "protocol.md"
+    write_protocol_md(doc, str(md_path))
+    text = md_path.read_text(encoding="utf-8")
+
+    assert "The blank must be diluent + Working Reagent, not Working Reagent alone." in text
+    assert "WR-only wells" not in text
+    assert "remove tips" not in text
+
+
 def test_pdf_text_renders_code_spans_in_courier():
     from platemap.protocol import _pdf_text
 
