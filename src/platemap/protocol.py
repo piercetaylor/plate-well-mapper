@@ -210,7 +210,7 @@ def build_protocol(
             f"({', '.join(buffer_blank_wells)}) contain diluent + Working Reagent and are "
             "used for blank subtraction and as the 0 µg/mL curve point; WR-only wells "
             f"({', '.join(wr_only_wells)}) contain Working Reagent only (no diluent/buffer) "
-            "and measure reagent background, reported in <prefix>_blank_qc.csv, not used as "
+            f"and measure reagent background, reported in {file_names.get('prefix', 'platemap')}_blank_qc.csv, not used as "
             "a blank."
         )
     else:
@@ -399,7 +399,7 @@ def build_protocol(
     if wr_only_wells:
         analysis_notes.append(
             "Buffer blanks are used for blank subtraction and as the 0 µg/mL curve point; "
-            "WR-only wells are reported in `<prefix>_blank_qc.csv` as reagent background; "
+            f"WR-only wells are reported in `{prefix}_blank_qc.csv` as reagent background; "
             "`--no-blank-in-fit` is not needed."
         )
     analysis_notes.append(
@@ -407,7 +407,7 @@ def build_protocol(
         "`platemap read`."
     )
     analysis_notes.append(
-        f"Enter the Gen5 protocol from `{file_names.get('gen5_setup_pdf', '<prefix>_gen5_setup.pdf')}` "
+        f"Enter the Gen5 protocol from `{file_names.get('gen5_setup_pdf', f'{prefix}_gen5_setup.pdf')}` "
         "before running the plate."
     )
     sections.append(Section("Analysis", [_steps(analysis_notes)]))

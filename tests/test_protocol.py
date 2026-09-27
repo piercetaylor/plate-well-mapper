@@ -138,7 +138,7 @@ def test_build_protocol_12ch_wr_only_blank_cols(tmp_path):
     assert "At dilution factor 5, a sample buffer with 250 mM imidazole gives 50 mM" in text
     assert "At dilution factor 5, a sample buffer with 300 mM imidazole gives 60 mM" in text
     assert "above the tolerated limit" in text
-    assert "<prefix>_blank_qc.csv" in text
+    assert "wr_blank_qc.csv" in text and "<prefix>" not in text
 
 
 def test_build_protocol_no_wr_only_matches_baseline_wording(tmp_path):
