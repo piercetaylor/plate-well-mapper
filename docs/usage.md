@@ -48,7 +48,8 @@ usage: platemap layout [-h] [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
   if not a valid ISO date.
 
 Writes `OUTDIR/<prefix>_layout.csv`, `OUTDIR/<prefix>_plates.xlsx`,
-`OUTDIR/<prefix>_platemap.pdf`, and `OUTDIR/<prefix>_protocol.md` /
+`OUTDIR/<prefix>_platemap.pdf`, the Gen5 setup sheet files (see
+"Gen5 setup sheet" below), and `OUTDIR/<prefix>_protocol.md` /
 `OUTDIR/<prefix>_protocol.pdf` (an auto-generated run protocol, see
 "Auto-generated protocol" below), then prints:
 
@@ -57,6 +58,10 @@ samples=<N> plates=<P> capacity=<C>
 <path to layout csv>
 <path to xlsx>
 <path to pdf>
+<path to gen5 setup pdf>
+<path to gen5 layout csv>
+<path to gen5 sample ids txt>
+<path to gen5 sample ids txt, per plate>
 <path to protocol md>
 <path to protocol pdf>
 ```
@@ -173,10 +178,10 @@ Writes, in order:
 3. `<prefix>_dilution.pdf` — one page per dilution plate, with the
    pipetting protocol (plate 1 includes the standard-prep table), a
    plate map, and a legend.
-4. `<prefix>_layout.csv`, `<prefix>_plates.xlsx`, `<prefix>_platemap.pdf`
-   — the normal `layout` outputs, built from the *diluted* samples (so
-   the Layout sheet's `dilution_factor` already includes the
-   pre-dilution).
+4. `<prefix>_layout.csv`, `<prefix>_plates.xlsx`, `<prefix>_platemap.pdf`,
+   and the Gen5 setup sheet files (see "Gen5 setup sheet" below) — the
+   normal `layout` outputs, built from the *diluted* samples (so the
+   Layout sheet's `dilution_factor` already includes the pre-dilution).
 5. `<prefix>_bca_analysis.ipynb` — the analysis notebook, with
    `MAPPED_CSV` pre-set to `<prefix>_plates_mapped.csv` and `OUTPUT_CSV`
    to `<prefix>_bca_results.csv`. Skipped with a note if the `notebook`
@@ -348,6 +353,65 @@ instructions, or numbered column transfers from `transfer_map` in
 multichannel mode); incubation/reading; the exact `platemap read` /
 `platemap analyze` commands for this run; QC checks; generic buffer-
 compatibility notes; and a record table with one row per assay plate.
+
+### Gen5 setup sheet
+
+Gen5 3.12 has no documented layout import format: the standards/blank/
+sample layout is entered by hand on Gen5's Plate Layout screen
+(Protocol > Plate Layout), and Sample IDs are imported from a plain
+text file (Plate > Batch Sample IDs > Import From File), one name per
+line, assigned to SPL1, SPL2, ... in order. `platemap layout` and
+`platemap dilute` automatically write, alongside their other outputs:
+
+- `<prefix>_gen5_setup.pdf`: a setup sheet for entering the layout in
+  Gen5. Page 1 shows the *protocol* layout (the single layout Gen5
+  applies to every plate, taken from the plate with the most samples,
+  normally plate 1) as an 8x12 matrix using the Gen5 ids
+  `check_gen5_layout` understands (`BCA:1`..`BCA:8` for the standard
+  group, with their concentrations; `BLK` for the blank; `SPL1..SPLn`
+  for samples), a standards concentration table, the blank wells, a
+  samples summary (SPL range, replicate count, orientation), and
+  numbered Gen5 entry steps (create the protocol, place standards,
+  enter concentrations, place blanks, place samples, save the protocol,
+  import Sample IDs, export results). Page 2 onward shows each plate's
+  *actual* contents (Gen5 id + our S# + sample name) to confirm against
+  the saved protocol, plus a note listing any wells the protocol labels
+  `SPL` that are empty on that plate (fewer samples than the plate the
+  protocol came from) — `platemap read` reports those as warnings, not
+  errors.
+- `<prefix>_gen5_layout.csv`: the flat Gen5 assignment table —
+  `plate, well, gen5_type, gen5_id, conc_ugml, short_id, sample_name,
+  replicate`.
+- `<prefix>_gen5_sample_ids.txt`: every plate's sample names
+  concatenated in SPL order, for a single Batch Sample IDs import
+  across all plates. Non-last plates are padded with blank lines up to
+  the protocol's SPL count, so each plate's samples land on its own
+  SPL1 when Gen5 fills one plate's SPL table before moving to the next.
+- `<prefix>_gen5_sample_ids_plate<N>.txt`: the same, one file per plate
+  (no padding), for importing plates individually.
+
+### `platemap gen5-setup LAYOUT_CSV [options]`
+
+Write the Gen5 setup sheet files from an existing `<prefix>_layout.csv`
+(from `platemap layout`/`platemap dilute`), without rebuilding the rest
+of the layout.
+
+```
+usage: platemap gen5-setup [-h] [-o OUTDIR] [--prefix PREFIX]
+                            [--experiment EXPERIMENT] [--date DATE]
+                            LAYOUT_CSV
+```
+
+- `LAYOUT_CSV`: path to a `<prefix>_layout.csv`.
+- `-o OUTDIR`, `--outdir OUTDIR`: output directory (default: the layout
+  CSV's folder).
+- `--prefix PREFIX`: output filename prefix (default: the layout CSV's
+  stem with a trailing `_layout` removed).
+- `--experiment EXPERIMENT`, `--date DATE`: same as `platemap layout`.
+
+Writes `<prefix>_gen5_setup.pdf`, `<prefix>_gen5_layout.csv`,
+`<prefix>_gen5_sample_ids.txt`, and `<prefix>_gen5_sample_ids_plate<N>.txt`
+(see "Gen5 setup sheet" above), and prints all of their paths.
 
 ### `platemap notebook [options]`
 

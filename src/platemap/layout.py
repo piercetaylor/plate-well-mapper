@@ -412,3 +412,30 @@ def write_layout_csv(rows: list[LayoutRow], path: str) -> None:
         writer.writerow(LAYOUT_COLUMNS)
         for r in rows:
             writer.writerow(["" if getattr(r, c) is None else getattr(r, c) for c in LAYOUT_COLUMNS])
+
+
+def read_layout_csv(path: str) -> list[LayoutRow]:
+    """Read a `<prefix>_layout.csv` (as written by `write_layout_csv`) into LayoutRow objects."""
+    with open(path, "r", encoding="utf-8-sig", newline="") as fh:
+        reader = csv.DictReader(fh)
+        rows: list[LayoutRow] = []
+        for values in reader:
+            rows.append(
+                LayoutRow(
+                    plate=int(values["plate"]),
+                    well=str(values["well"]),
+                    row=str(values["row"]),
+                    col=int(values["col"]),
+                    role=str(values["role"]),
+                    short_id=str(values["short_id"]),
+                    label=str(values["label"]),
+                    conc_ugml=None if values["conc_ugml"] in (None, "") else float(values["conc_ugml"]),
+                    sample_name=None if values["sample_name"] in (None, "") else str(values["sample_name"]),
+                    dilution_factor=(
+                        None if values["dilution_factor"] in (None, "") else float(values["dilution_factor"])
+                    ),
+                    replicate=int(values["replicate"]),
+                    notes="" if values["notes"] is None else str(values["notes"]),
+                )
+            )
+    return rows

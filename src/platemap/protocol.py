@@ -150,6 +150,7 @@ def build_protocol(
         ("plate_map_pdf", "Plate map PDF"),
         ("workbook", "Workbook"),
         ("notebook", "Notebook"),
+        ("gen5_setup_pdf", "Gen5 setup sheet"),
     ):
         if key in file_names:
             overview.append((label, file_names[key]))
@@ -351,6 +352,10 @@ def build_protocol(
     analysis_notes.append(
         "The Gen5 protocol layout must match this layout, or pass `--no-layout-check` to "
         "`platemap read`."
+    )
+    analysis_notes.append(
+        f"Enter the Gen5 protocol from `{file_names.get('gen5_setup_pdf', '<prefix>_gen5_setup.pdf')}` "
+        "before running the plate."
     )
     sections.append(Section("Analysis", [_steps(analysis_notes)]))
 

@@ -164,6 +164,27 @@ def _build_parser() -> argparse.ArgumentParser:
     analyze_p.add_argument("-o", "--outdir", default=None, help="output directory (default: the mapped CSV's folder)")
     analyze_p.add_argument("--prefix", default=None, help="output filename prefix (default: mapped CSV stem with a trailing '_plates_mapped' or '_mapped' removed)")
 
+    gen5_setup_p = subparsers.add_parser(
+        "gen5-setup",
+        help="write a Gen5 plate-layout setup sheet from an existing layout CSV",
+        description=(
+            "Read a `<prefix>_layout.csv` (from `platemap layout`/`dilute`) and write the "
+            "Gen5 setup PDF, layout CSV, and sample-ID text files."
+        ),
+        epilog="examples:\n  platemap gen5-setup out/platemap_layout.csv\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gen5_setup_p.add_argument("layout_csv", metavar="LAYOUT_CSV", help="path to a `<prefix>_layout.csv`")
+    gen5_setup_p.add_argument("-o", "--outdir", default=None, help="output directory (default: the layout CSV's folder)")
+    gen5_setup_p.add_argument("--prefix", default=None, help="output filename prefix (default: layout CSV stem with a trailing '_layout' removed)")
+    gen5_setup_p.add_argument("--experiment", default="", help="experiment name for the setup PDF")
+    gen5_setup_p.add_argument(
+        "--date",
+        type=_valid_date,
+        default=dt.date.today().isoformat(),
+        help="experiment date, YYYY-MM-DD (default: today)",
+    )
+
     notebook_p = subparsers.add_parser(
         "notebook",
         help="write a Jupyter notebook for BCA standard-curve analysis",
@@ -198,9 +219,14 @@ def _write_layout_outputs(
     transfer_lines: dict[int, list[str]] | None = None,
     channels: int | None = None,
     replicates: int = 3,
-) -> tuple[Path, Path, Path, list]:
-    """Build a layout from samples and write its CSV, workbook, and PDF; return the paths + rows."""
+) -> tuple[Path, Path, Path, list, list[Path]]:
+    """Build a layout from samples and write its CSV, workbook, PDF, and Gen5 setup files.
+
+    Returns (layout_csv, workbook, platemap_pdf, rows, gen5_paths). `gen5_paths` lists
+    the Gen5 setup PDF, Gen5 layout CSV, and sample-ID text file(s), in that order.
+    """
     from platemap.excel import write_excel
+    from platemap.gen5_setup import write_gen5_layout_csv, write_gen5_sample_ids, write_gen5_setup_pdf
     from platemap.layout import build_layout, write_layout_csv
     from platemap.pdf import write_pdf
 
@@ -216,7 +242,16 @@ def _write_layout_outputs(
     write_excel(rows, str(xlsx_path), experiment=experiment, date=date)
     write_pdf(rows, str(pdf_path), experiment=experiment, date=date, transfer_lines=transfer_lines)
 
-    return csv_path, xlsx_path, pdf_path, rows
+    gen5_pdf_path = outdir / f"{prefix}_gen5_setup.pdf"
+    gen5_csv_path = outdir / f"{prefix}_gen5_layout.csv"
+    write_gen5_setup_pdf(rows, str(gen5_pdf_path), experiment=experiment, date=date)
+    write_gen5_layout_csv(rows, str(gen5_csv_path))
+    gen5_sample_ids_path, gen5_sample_ids_plate_paths = write_gen5_sample_ids(rows, outdir / prefix)
+
+    gen5_paths = [gen5_pdf_path, gen5_csv_path, gen5_sample_ids_path]
+    gen5_paths.extend(gen5_sample_ids_plate_paths[plate] for plate in sorted(gen5_sample_ids_plate_paths))
+
+    return csv_path, xlsx_path, pdf_path, rows, gen5_paths
 
 
 def _run_layout(args: argparse.Namespace) -> int:
@@ -230,7 +265,7 @@ def _run_layout(args: argparse.Namespace) -> int:
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
+    csv_path, xlsx_path, pdf_path, rows, gen5_paths = _write_layout_outputs(
         samples,
         outdir,
         args.prefix,
@@ -249,6 +284,8 @@ def _run_layout(args: argparse.Namespace) -> int:
     print(csv_path)
     print(xlsx_path)
     print(pdf_path)
+    for gen5_path in gen5_paths:
+        print(gen5_path)
 
     protocol_md_path = outdir / f"{args.prefix}_protocol.md"
     protocol_pdf_path = outdir / f"{args.prefix}_protocol.pdf"
@@ -265,6 +302,7 @@ def _run_layout(args: argparse.Namespace) -> int:
         file_names={
             "plate_map_pdf": pdf_path.name,
             "workbook": xlsx_path.name,
+            "gen5_setup_pdf": gen5_paths[0].name,
             "prefix": args.prefix,
         },
     )
@@ -336,7 +374,7 @@ def _run_dilute(args: argparse.Namespace) -> int:
                 f"Multichannel: dil {unit} {dindex} -> {unit}s {aindex_str}"
             )
 
-    layout_csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
+    layout_csv_path, xlsx_path, pdf_path, rows, gen5_paths = _write_layout_outputs(
         diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date,
         multichannel, transfer_lines, channels=channels, replicates=args.replicates,
     )
@@ -367,6 +405,8 @@ def _run_dilute(args: argparse.Namespace) -> int:
     print(layout_csv_path)
     print(xlsx_path)
     print(pdf_path)
+    for gen5_path in gen5_paths:
+        print(gen5_path)
     if notebook_path is not None:
         print(notebook_path)
 
@@ -390,6 +430,7 @@ def _run_dilute(args: argparse.Namespace) -> int:
             "plate_map_pdf": pdf_path.name,
             "workbook": xlsx_path.name,
             "notebook": notebook_path.name if notebook_path is not None else "",
+            "gen5_setup_pdf": gen5_paths[0].name,
             "prefix": args.prefix,
         },
     )
@@ -517,6 +558,37 @@ def _run_read(args: argparse.Namespace) -> int:
     print(mapped_csv_path)
     print(gen5_reads_csv_path)
     print(f"missing={missing}")
+    return 0
+
+
+def _run_gen5_setup(args: argparse.Namespace) -> int:
+    from platemap.gen5_setup import write_gen5_layout_csv, write_gen5_sample_ids, write_gen5_setup_pdf
+    from platemap.layout import read_layout_csv
+
+    layout_csv_path = Path(args.layout_csv)
+    rows = read_layout_csv(str(layout_csv_path))
+
+    outdir = Path(args.outdir) if args.outdir else layout_csv_path.parent
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    if args.prefix is not None:
+        prefix = args.prefix
+    else:
+        stem = layout_csv_path.stem
+        prefix = stem[: -len("_layout")] if stem.endswith("_layout") else stem
+
+    gen5_pdf_path = outdir / f"{prefix}_gen5_setup.pdf"
+    gen5_csv_path = outdir / f"{prefix}_gen5_layout.csv"
+
+    write_gen5_setup_pdf(rows, str(gen5_pdf_path), experiment=args.experiment, date=args.date)
+    write_gen5_layout_csv(rows, str(gen5_csv_path))
+    gen5_sample_ids_path, gen5_sample_ids_plate_paths = write_gen5_sample_ids(rows, outdir / prefix)
+
+    print(gen5_pdf_path)
+    print(gen5_csv_path)
+    print(gen5_sample_ids_path)
+    for plate in sorted(gen5_sample_ids_plate_paths):
+        print(gen5_sample_ids_plate_paths[plate])
     return 0
 
 
@@ -652,6 +724,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_read(args)
         if args.command == "dilute":
             return _run_dilute(args)
+        if args.command == "gen5-setup":
+            return _run_gen5_setup(args)
         if args.command == "notebook":
             return _run_notebook(args)
         if args.command == "analyze":

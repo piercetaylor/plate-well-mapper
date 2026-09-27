@@ -154,6 +154,8 @@ its own standard curve.
 | `<prefix>_layout.csv` | `layout`, `dilute` | flat table of every well: plate, well, role, concentration/sample, replicate |
 | `<prefix>_plates.xlsx` | `layout`, `dilute` | Info, Layout, and per-plate Map/Reader/Mapped sheets |
 | `<prefix>_platemap.pdf` | `layout`, `dilute` | printable plate map with a legend |
+| `<prefix>_gen5_setup.pdf`, `<prefix>_gen5_layout.csv` | `layout`, `dilute`, `gen5-setup` | Gen5 3.12 plate-layout entry sheet + flat Gen5 id table |
+| `<prefix>_gen5_sample_ids.txt`, `<prefix>_gen5_sample_ids_plate<N>.txt` | `layout`, `dilute`, `gen5-setup` | Sample ID files for Gen5's Batch Sample IDs import |
 | `<prefix>_dilution.pdf`, `<prefix>_dilution.csv` | `dilute` | dilution plate map and protocol, with standard prep |
 | `<prefix>_samples_diluted.csv` | `dilute` | sample list with the dilution factor applied |
 | `<prefix>_bca_analysis.ipynb` | `dilute` | analysis notebook pointed at `<prefix>_plates_mapped.csv` |

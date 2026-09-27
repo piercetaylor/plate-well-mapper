@@ -416,6 +416,100 @@ def test_dilute_avoid_edges_and_multichannel_errors(tmp_path, capsys):
     assert err.startswith("error:")
 
 
+def test_layout_writes_gen5_setup_files(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["layout", samples_path, "-o", str(outdir)])
+    assert rc == 0
+
+    assert (outdir / "platemap_gen5_setup.pdf").exists()
+    assert (outdir / "platemap_gen5_layout.csv").exists()
+    assert (outdir / "platemap_gen5_sample_ids.txt").exists()
+    assert (outdir / "platemap_gen5_sample_ids_plate1.txt").exists()
+
+    out = capsys.readouterr().out
+    assert "platemap_gen5_setup.pdf" in out
+    assert "platemap_gen5_layout.csv" in out
+    assert "platemap_gen5_sample_ids.txt" in out
+
+
+def test_dilute_writes_gen5_setup_files(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    rc = main(["dilute", samples_path, "-o", str(outdir), "--prefix", "demo"])
+    assert rc == 0
+
+    assert (outdir / "demo_gen5_setup.pdf").exists()
+    assert (outdir / "demo_gen5_layout.csv").exists()
+    assert (outdir / "demo_gen5_sample_ids.txt").exists()
+
+    out = capsys.readouterr().out
+    assert "demo_gen5_setup.pdf" in out
+
+
+def test_gen5_setup_help_exits_zero(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["gen5-setup", "-h"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage" in out.lower()
+
+
+def test_gen5_setup_from_existing_layout_csv(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=60)
+    outdir = tmp_path / "out"
+    rc = main(
+        [
+            "layout",
+            samples_path,
+            "-o",
+            str(outdir),
+            "--prefix",
+            "run",
+            "--channels",
+            "12",
+            "--replicates",
+            "2",
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    gen5_outdir = tmp_path / "gen5out"
+    rc = main(
+        [
+            "gen5-setup",
+            str(outdir / "run_layout.csv"),
+            "-o",
+            str(gen5_outdir),
+            "--prefix",
+            "run2",
+        ]
+    )
+    assert rc == 0
+
+    assert (gen5_outdir / "run2_gen5_setup.pdf").exists()
+    assert (gen5_outdir / "run2_gen5_layout.csv").exists()
+    assert (gen5_outdir / "run2_gen5_sample_ids.txt").exists()
+    assert (gen5_outdir / "run2_gen5_sample_ids_plate1.txt").exists()
+    assert (gen5_outdir / "run2_gen5_sample_ids_plate2.txt").exists()
+
+    out = capsys.readouterr().out
+    assert "run2_gen5_setup.pdf" in out
+
+
+def test_gen5_setup_default_prefix_strips_layout_suffix(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=2)
+    outdir = tmp_path / "out"
+    main(["layout", samples_path, "-o", str(outdir)])
+    capsys.readouterr()
+
+    gen5_outdir = tmp_path / "gen5out"
+    rc = main(["gen5-setup", str(outdir / "platemap_layout.csv"), "-o", str(gen5_outdir)])
+    assert rc == 0
+    assert (gen5_outdir / "platemap_gen5_setup.pdf").exists()
+
+
 def test_dilute_layout_sheet_has_diluted_dilution_factor(tmp_path):
     from platemap.excel import read_layout
 
