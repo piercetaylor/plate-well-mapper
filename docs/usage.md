@@ -33,8 +33,15 @@ usage: platemap layout [-h] [-o OUTDIR] [--prefix PREFIX] [--avoid-edges]
 - `--avoid-edges`: restrict wells to rows B-G, columns 2-11 (60 wells)
   instead of the full 96-well plate.
 - `--multichannel`: 8-channel column-wise layout instead of the default
-  row-wise layout (see "Multichannel mode" below). Errors if combined
-  with `--avoid-edges`.
+  row-wise layout (see "Multichannel mode" below). Alias for
+  `--channels 8`. Errors if combined with `--avoid-edges`.
+- `--channels {8,12}`: multichannel pipette width, 8 (column-wise) or 12
+  (row-wise, see "Multichannel mode" below); implies multichannel.
+  Errors if combined with `--avoid-edges`.
+- `--replicates {2,3}`: sample replicate count (default `3`). Standards
+  stay duplicate in every mode; this only changes the sample group size
+  (row-wise) or the sample lane width (multichannel modes; see
+  "Multichannel mode" below).
 - `--experiment EXPERIMENT`: experiment name, recorded on the Info sheet
   and the PDF header.
 - `--date DATE`: experiment date, `YYYY-MM-DD` (default: today). Rejected
@@ -148,8 +155,13 @@ usage: platemap dilute [-h] [--factor FACTOR] [--final-volume FINAL_VOLUME]
 - `-o OUTDIR`, `--outdir OUTDIR`, `--prefix PREFIX`, `--avoid-edges`,
   `--experiment EXPERIMENT`, `--date DATE`: same as `platemap layout`.
 - `--multichannel`: 8-channel column-wise layout for both the dilution
-  and assay plates (see "Multichannel mode" below). Errors if combined
-  with `--avoid-edges`.
+  and assay plates (see "Multichannel mode" below). Alias for
+  `--channels 8`. Errors if combined with `--avoid-edges`.
+- `--channels {8,12}`: multichannel pipette width, 8 (column-wise) or 12
+  (row-wise, see "Multichannel mode" below); implies multichannel.
+  Errors if combined with `--avoid-edges`.
+- `--replicates {2,3}`: sample replicate count (default `3`); see
+  "Multichannel mode" below.
 
 Writes, in order:
 
@@ -189,11 +201,31 @@ entirely) for dilute samples.
 
 ### Multichannel mode
 
-`--multichannel` (on `platemap layout` and `platemap dilute`) switches
-from the default row-wise triplicate layout to an 8-channel,
-column-wise layout: every dilution-plate-to-assay-plate transfer is a
-whole-column, 8-channel pipette transfer. Not compatible with
-`--avoid-edges`. Capacity is 24 samples/assay plate (vs. 26 row-wise).
+`--multichannel` (on `platemap layout` and `platemap dilute`), or
+`--channels 8`/`--channels 12`, switches from the default row-wise
+layout to a column-wise (8-channel) or row-wise (12-channel) layout:
+every dilution-plate-to-assay-plate transfer is a whole-column or
+whole-row multichannel pipette transfer. Not compatible with
+`--avoid-edges`.
+
+`--replicates {2,3}` (default `3`) sets the sample replicate count in
+every mode; standards always stay duplicate. It changes:
+
+- row-wise: the sample group size (2 or 3 wells/sample).
+- 8-channel: how many assay columns each 8-sample dilution column feeds
+  (2 or 3 assay columns/dilution column).
+- 12-channel: how many assay rows each 12-sample dilution row feeds (2
+  or 3 assay rows/dilution row).
+
+Capacity per assay plate:
+
+| Mode | replicates=2 | replicates=3 (default) |
+|---|---|---|
+| row-wise | 39 | 26 |
+| 8-channel | 32 | 24 |
+| 12-channel | 36 | 24 |
+
+#### 8-channel mode (`--channels 8`)
 
 Dilution plate 1 (column-wise): column 1 = standards replicate 1,
 column 2 = standards replicate 2 (rows A-H = 2000/1500/1000/750/500/
@@ -217,17 +249,20 @@ plates use all 12 columns (96 samples each, no standards):
    +-----+-----+-----+-----+-----+-----+     +-----+
 ```
 
-Assay plates (column-wise, 24 samples/plate): column 1 = standards
-replicate 1 (from dilution column 1), column 2 = standards replicate 2
-(dilution column 2), column 3 = blank x8 (dilution column 3); columns
-4-6, 7-9, 10-12 = three 8-sample dilution columns, each in triplicate
-(row `r` of a dilution column -> row `r` in all three of its assay
-columns). Assay plate `p` takes the next three 8-sample dilution
-columns in order (e.g. plate 2 = dilution columns 4, 5, 6 if plate 1
-used columns 1-3 of its samples); the last dilution column on a run may
-be partly filled, leaving matching wells empty on both plates. Sample
-numbering (`S#`) is global, in input order, and is identical between
-the dilution plate and the assay layout:
+Assay plates (column-wise, 24 samples/plate at the default
+`--replicates 3`): column 1 = standards replicate 1 (from dilution
+column 1), column 2 = standards replicate 2 (dilution column 2), column
+3 = blank x8 (dilution column 3); columns 4-6, 7-9, 10-12 = three
+8-sample dilution columns, each in triplicate (row `r` of a dilution
+column -> row `r` in all three of its assay columns). Assay plate `p`
+takes the next three 8-sample dilution columns in order (e.g. plate 2 =
+dilution columns 4, 5, 6 if plate 1 used columns 1-3 of its samples);
+the last dilution column on a run may be partly filled, leaving
+matching wells empty on both plates. Sample numbering (`S#`) is global,
+in input order, and is identical between the dilution plate and the
+assay layout. With `--replicates 2`, each dilution column feeds 2 assay
+columns instead of 3 (cols 4-5, 6-7, 8-9, 10-11; col 12 unused),
+32 samples/plate:
 
 ```
       1     2     3     4     5     6     7     8     9    10    11    12
@@ -237,11 +272,66 @@ the dilution plate and the assay layout:
  ...
 ```
 
-`platemap dilute --multichannel` computes a `transfer_map` (assay
-plate, dilution plate, dilution column, assay columns, contents) used
-by the dilution PDF (protocol steps + a transfer table) and the assay
-plate map PDF (one "Multichannel: dil col X -> cols a,b,c" line per
-plate).
+`platemap dilute --channels 8` (or `--multichannel`) computes a
+`transfer_map` (assay plate, dilution plate, dilution column, assay
+columns, contents) used by the dilution PDF (protocol steps + a
+transfer table) and the assay plate map PDF (one "Multichannel: dil col
+X -> cols a,b,c" line per plate).
+
+#### 12-channel mode (`--channels 12`)
+
+Dilution plate 1 (row-wise): row A = standards replicate 1, row B =
+standards replicate 2 (columns 1-8 = 2000/1500/1000/750/500/250/125/25
+µg/mL, same stock/serial prep scheme as row-wise, each replicate row
+sourced from itself), columns 9-12 of rows A and B = blank (200 µL
+diluent, 8 blank wells total), rows C-H = samples, one well each,
+row-major (C1, C2, ... C12, D1, ...). Plate 1 holds 72 samples; further
+dilution plates use all 8 rows (96 samples each, no standards):
+
+```
+       1     2     3     4     5     6     7     8     9    10    11    12
+    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+  A |2000 |1500 |1000 | 750 | 500 | 250 | 125 |  25 | BLK | BLK | BLK | BLK |
+  B |2000 |1500 |1000 | 750 | 500 | 250 | 125 |  25 | BLK | BLK | BLK | BLK |
+  C | S1  | S2  | S3  | S4  | S5  | S6  | S7  | S8  | S9  | S10 | S11 | S12 |
+  D | S13 | S14 | S15 | S16 | S17 | S18 | S19 | S20 | S21 | S22 | S23 | S24 |
+  ...
+    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+```
+
+Assay plates (row-wise, 24 samples/plate at the default `--replicates
+3`): row A = standards replicate 1 (from dilution row A), row B =
+standards replicate 2 (dilution row B, blanks travel with rows A/B
+since they share the same whole-row transfer); rows C-E and F-H = two
+12-sample dilution rows, each in triplicate (column `c` of a dilution
+row -> column `c` in all three of its assay rows). Assay plate `p`
+takes the next two 12-sample dilution rows in order (e.g. plate 2 =
+dilution rows E, F if plate 1 used rows C-D of its samples); the last
+dilution row on a run may be partly filled, leaving matching wells
+empty on both plates. Sample numbering (`S#`) is global, in input
+order, and is identical between the dilution plate and the assay
+layout. With `--replicates 2`, each dilution row feeds 2 assay rows
+instead of 3 (C/D, E/F, G/H), 36 samples/plate:
+
+```
+       1     2     3     4     5     6     7     8     9    10    11    12
+    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+  A |2000 |1500 |1000 | 750 | 500 | 250 | 125 |  25 | BLK | BLK | BLK | BLK |
+  B |2000 |1500 |1000 | 750 | 500 | 250 | 125 |  25 | BLK | BLK | BLK | BLK |
+  C | S1  | S2  | S3  | S4  | S5  | S6  | S7  | S8  | S9  | S10 | S11 | S12 |
+  D | S1  | S2  | S3  | S4  | S5  | S6  | S7  | S8  | S9  | S10 | S11 | S12 |
+  E | S13 | S14 | S15 | S16 | S17 | S18 | S19 | S20 | S21 | S22 | S23 | S24 |
+  F | S13 | S14 | S15 | S16 | S17 | S18 | S19 | S20 | S21 | S22 | S23 | S24 |
+  G | S25 | ... |
+  H | S25 | ... |
+    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+```
+
+`platemap dilute --channels 12` computes the same shape of
+`transfer_map` (assay plate, dilution plate, dilution row, assay rows,
+contents) used by the dilution PDF (protocol steps: "row-to-row with a
+12-channel pipette" + a transfer table) and the assay plate map PDF
+(one "Multichannel: dil row X -> rows a,b" line per plate).
 
 ### Auto-generated protocol
 

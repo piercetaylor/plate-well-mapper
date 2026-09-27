@@ -15,6 +15,7 @@ from platemap.dilution import (
 )
 from platemap.layout import LayoutRow
 from platemap.samples import Sample
+from platemap.wells import ROWS_FULL
 
 WR_WELL_UL = 200.0
 WR_EXCESS = 1.10
@@ -85,6 +86,8 @@ def build_protocol(
     layout_rows: list[LayoutRow],
     avoid_edges: bool = False,
     multichannel: bool = False,
+    channels: int | None = None,
+    replicates: int = 3,
     plan: DilutionPlan | None = None,
     dilution_wells: list[DilutionWell] | None = None,
     n_assay_plates: int | None = None,
@@ -99,7 +102,14 @@ def build_protocol(
     if n_assay_plates is None:
         n_assay_plates = len(plates)
     n_wells_used = len(layout_rows)
-    layout_mode = "8-channel column-wise" if multichannel else "row-wise"
+    if channels is None and multichannel:
+        channels = 8
+    if channels == 12:
+        layout_mode = "12-channel row-wise"
+    elif channels == 8:
+        layout_mode = "8-channel column-wise"
+    else:
+        layout_mode = "row-wise"
 
     factor = plan.factor if plan else 1.0
     wr_range_low, wr_range_high = 25.0, 2000.0
@@ -112,7 +122,7 @@ def build_protocol(
         ("Experiment", experiment or "(unnamed)"),
         ("Date", date),
         ("Samples", str(n_samples)),
-        ("Replicates", "3 per sample"),
+        ("Replicates", f"{replicates} per sample"),
         ("Assay plates", f"{n_assay_plates} ({plate_range_str})"),
         ("Wells used", str(n_wells_used)),
         ("Layout mode", layout_mode),
@@ -166,7 +176,7 @@ def build_protocol(
         f"(50:1, 10% excess for {n_wells_used} wells)."
     )
     if multichannel:
-        materials_lines.append("8-channel P200 pipette and a reagent reservoir.")
+        materials_lines.append(f"{channels}-channel P200 pipette and a reagent reservoir.")
     sections.append(Section("Materials", [_steps(materials_lines)]))
 
     # ---- before starting --------------------------------------------------
@@ -250,36 +260,55 @@ def build_protocol(
 
     # ---- plating -----------------------------------------------------------
     if multichannel:
-        transfers = dilution_transfer_map(n_samples) if dilution_wells else []
+        transfers = (
+            dilution_transfer_map(n_samples, channels=channels, replicates=replicates)
+            if dilution_wells
+            else []
+        )
+        lane = "row" if channels == 12 else "col"
         plating_steps = []
         if transfers:
-            for assay_plate, dplate, dcol, acols, contents in transfers:
-                acol_str = ", ".join(str(a) for a in acols)
+            for assay_plate, dplate, dindex, aindices, contents in transfers:
+                aindex_str = ", ".join(str(a) for a in aindices)
                 plating_steps.append(
-                    f"Plate {assay_plate}: dilution plate {dplate} col {dcol} ({contents}) -> "
-                    f"assay col(s) {acol_str}, 25 µL, 8-channel pipette."
+                    f"Plate {assay_plate}: dilution plate {dplate} {lane} {dindex} ({contents}) -> "
+                    f"assay {lane}(s) {aindex_str}, 25 µL, {channels}-channel pipette."
                 )
+        elif channels == 12:
+            for plate in plates:
+                plate_rows = [r for r in layout_rows if r.plate == plate]
+                blocks = sorted(
+                    {(ROWS_FULL.index(r.row) - 2) // replicates for r in plate_rows if r.role == "sample"}
+                )
+                for block in blocks:
+                    start_idx = 2 + block * replicates
+                    rows_ = ROWS_FULL[start_idx : start_idx + replicates]
+                    plating_steps.append(
+                        f"Plate {plate}: source row -> assay rows "
+                        f"{', '.join(rows_)}, 25 µL, 12-channel pipette."
+                    )
         else:
             for plate in plates:
                 plate_rows = [r for r in layout_rows if r.plate == plate]
-                blocks = sorted({(r.col - 4) // 3 for r in plate_rows if r.role == "sample"})
+                blocks = sorted({(r.col - 4) // replicates for r in plate_rows if r.role == "sample"})
                 for block in blocks:
-                    cols = (4 + 3 * block, 5 + 3 * block, 6 + 3 * block)
+                    cols = tuple(4 + replicates * block + k for k in range(replicates))
                     plating_steps.append(
                         f"Plate {plate}: source column -> assay cols "
                         f"{', '.join(str(c) for c in cols)}, 25 µL, 8-channel pipette."
                     )
         plating_steps.append(
-            f"Add {WR_WELL_UL:g} µL Working Reagent to every used well with an 8-channel "
+            f"Add {WR_WELL_UL:g} µL Working Reagent to every used well with a {channels}-channel "
             "pipette, one assay plate at a time; record the time WR was added for each plate."
         )
         sections.append(Section("Plating", [_steps(plating_steps)]))
     else:
+        rep_word = {2: "duplicate", 3: "triplicate"}.get(replicates, f"{replicates}-fold")
         plating_steps = [
             "Standards: add 25 µL of each standard/blank well to its assay wells (A1-B6 map "
             "1:1; an 8-channel pipette is fine for this block).",
-            "Samples: add 25 µL of each dilution/sample well to its 3 triplicate assay wells "
-            "(dilution well S# -> assay map S#).",
+            f"Samples: add 25 µL of each dilution/sample well to its {replicates} {rep_word} "
+            "assay wells (dilution well S# -> assay map S#).",
             f"Add {WR_WELL_UL:g} µL Working Reagent to every used well, one assay plate at a "
             "time; record the time WR was added for each plate.",
         ]

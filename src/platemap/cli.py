@@ -50,7 +50,22 @@ def _build_parser() -> argparse.ArgumentParser:
     layout_p.add_argument(
         "--multichannel",
         action="store_true",
-        help="8-channel column-wise layout (standards col 1-2, blank col 3, samples cols 4-12)",
+        help="8-channel column-wise layout (standards col 1-2, blank col 3, samples cols 4-12); "
+        "alias for --channels 8",
+    )
+    layout_p.add_argument(
+        "--channels",
+        type=int,
+        choices=(8, 12),
+        default=None,
+        help="multichannel pipette width: 8 (column-wise) or 12 (row-wise); implies multichannel",
+    )
+    layout_p.add_argument(
+        "--replicates",
+        type=int,
+        choices=(2, 3),
+        default=3,
+        help="sample replicate count (default: 3); standards stay duplicate",
     )
     layout_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     layout_p.add_argument(
@@ -105,7 +120,21 @@ def _build_parser() -> argparse.ArgumentParser:
     dilute_p.add_argument(
         "--multichannel",
         action="store_true",
-        help="8-channel column-wise layout for both dilution and assay plates",
+        help="8-channel column-wise layout for both dilution and assay plates; alias for --channels 8",
+    )
+    dilute_p.add_argument(
+        "--channels",
+        type=int,
+        choices=(8, 12),
+        default=None,
+        help="multichannel pipette width: 8 (column-wise) or 12 (row-wise); implies multichannel",
+    )
+    dilute_p.add_argument(
+        "--replicates",
+        type=int,
+        choices=(2, 3),
+        default=3,
+        help="sample replicate count (default: 3); standards stay duplicate",
     )
     dilute_p.add_argument("--experiment", default="", help="experiment name for the output sheets/PDF")
     dilute_p.add_argument(
@@ -167,13 +196,17 @@ def _write_layout_outputs(
     date: str,
     multichannel: bool = False,
     transfer_lines: dict[int, list[str]] | None = None,
+    channels: int | None = None,
+    replicates: int = 3,
 ) -> tuple[Path, Path, Path, list]:
     """Build a layout from samples and write its CSV, workbook, and PDF; return the paths + rows."""
     from platemap.excel import write_excel
     from platemap.layout import build_layout, write_layout_csv
     from platemap.pdf import write_pdf
 
-    rows = build_layout(samples, avoid_edges=avoid_edges, multichannel=multichannel)
+    rows = build_layout(
+        samples, avoid_edges=avoid_edges, multichannel=multichannel, channels=channels, replicates=replicates
+    )
 
     csv_path = outdir / f"{prefix}_layout.csv"
     xlsx_path = outdir / f"{prefix}_plates.xlsx"
@@ -191,17 +224,27 @@ def _run_layout(args: argparse.Namespace) -> int:
     from platemap.protocol import build_protocol, write_protocol_md, write_protocol_pdf
 
     samples = read_samples(args.samples)
+    channels = args.channels if args.channels is not None else (8 if args.multichannel else None)
+    multichannel = channels is not None
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
-        samples, outdir, args.prefix, args.avoid_edges, args.experiment, args.date, args.multichannel
+        samples,
+        outdir,
+        args.prefix,
+        args.avoid_edges,
+        args.experiment,
+        args.date,
+        multichannel,
+        channels=channels,
+        replicates=args.replicates,
     )
 
     n = len(samples)
-    plates = n_plates(n, args.avoid_edges, args.multichannel)
-    cap = capacity(args.avoid_edges, args.multichannel)
+    plates = n_plates(n, args.avoid_edges, multichannel, channels, args.replicates)
+    cap = capacity(args.avoid_edges, multichannel, channels, args.replicates)
     print(f"samples={n} plates={plates} capacity={cap}")
     print(csv_path)
     print(xlsx_path)
@@ -215,7 +258,9 @@ def _run_layout(args: argparse.Namespace) -> int:
         samples=samples,
         layout_rows=rows,
         avoid_edges=args.avoid_edges,
-        multichannel=args.multichannel,
+        multichannel=multichannel,
+        channels=channels,
+        replicates=args.replicates,
         n_assay_plates=plates,
         file_names={
             "plate_map_pdf": pdf_path.name,
@@ -246,12 +291,14 @@ def _run_dilute(args: argparse.Namespace) -> int:
     from platemap.protocol import build_protocol, write_protocol_md, write_protocol_pdf
 
     samples = read_samples(args.samples)
+    channels = args.channels if args.channels is not None else (8 if args.multichannel else None)
+    multichannel = channels is not None
     plan = make_plan(factor=args.factor, final_volume_ul=args.final_volume)
     diluted = apply_dilution(samples, plan.factor)
-    dilution_wells = build_dilution_layout(samples, plan, multichannel=args.multichannel)
+    dilution_wells = build_dilution_layout(samples, plan, multichannel=multichannel, channels=channels)
 
     n = len(samples)
-    assay_plates = n_plates(n, args.avoid_edges, args.multichannel)
+    assay_plates = n_plates(n, args.avoid_edges, multichannel, channels, args.replicates)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -269,24 +316,29 @@ def _run_dilute(args: argparse.Namespace) -> int:
         n_assay_plates=assay_plates,
         experiment=args.experiment,
         date=args.date,
-        multichannel=args.multichannel,
+        multichannel=multichannel,
+        channels=channels or 8,
+        replicates=args.replicates,
         n_samples=n,
     )
 
     transfer_lines = None
-    if args.multichannel:
+    if multichannel:
         transfer_lines = {}
-        for assay_plate, dplate, dcol, acols, contents in transfer_map(n):
+        unit = "row" if channels == 12 else "col"
+        for assay_plate, dplate, dindex, aindices, contents in transfer_map(
+            n, channels=channels, replicates=args.replicates
+        ):
             if not contents.startswith("S"):
                 continue
-            acol_str = ",".join(str(a) for a in acols)
+            aindex_str = ",".join(str(a) for a in aindices)
             transfer_lines.setdefault(assay_plate, []).append(
-                f"Multichannel: dil col {dcol} -> cols {acol_str}"
+                f"Multichannel: dil {unit} {dindex} -> {unit}s {aindex_str}"
             )
 
     layout_csv_path, xlsx_path, pdf_path, rows = _write_layout_outputs(
         diluted, outdir, args.prefix, args.avoid_edges, args.experiment, args.date,
-        args.multichannel, transfer_lines,
+        multichannel, transfer_lines, channels=channels, replicates=args.replicates,
     )
 
     notebook_path = outdir / f"{args.prefix}_bca_analysis.ipynb"
@@ -302,7 +354,7 @@ def _run_dilute(args: argparse.Namespace) -> int:
         print("note: notebook extras not installed, skipping analysis notebook")
         notebook_path = None
 
-    dilution_plates = dilution_plate_count(n, args.multichannel)
+    dilution_plates = dilution_plate_count(n, multichannel, channels)
     print(
         f"samples={n} factor={plan.factor:g} sample_ul={plan.sample_volume_ul:g} "
         f"diluent_ul={plan.diluent_volume_ul:g} dilution_plates={dilution_plates} assay_plates={assay_plates}"
@@ -326,7 +378,9 @@ def _run_dilute(args: argparse.Namespace) -> int:
         samples=samples,
         layout_rows=rows,
         avoid_edges=args.avoid_edges,
-        multichannel=args.multichannel,
+        multichannel=multichannel,
+        channels=channels,
+        replicates=args.replicates,
         plan=plan,
         dilution_wells=dilution_wells,
         n_assay_plates=assay_plates,

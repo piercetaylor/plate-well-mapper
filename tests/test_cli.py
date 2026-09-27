@@ -361,6 +361,43 @@ def test_dilute_multichannel_writes_all_files_incl_protocol(tmp_path, capsys):
     assert "assay_plates=3" in out
 
 
+def test_dilute_12channel_replicates2_writes_all_files_incl_protocol(tmp_path, capsys):
+    samples_path = _write_samples(tmp_path, n=60)
+    outdir = tmp_path / "out"
+    rc = main(
+        [
+            "dilute",
+            samples_path,
+            "-o",
+            str(outdir),
+            "--prefix",
+            "mc12",
+            "--channels",
+            "12",
+            "--replicates",
+            "2",
+        ]
+    )
+    assert rc == 0
+
+    expected = [
+        "mc12_samples_diluted.csv",
+        "mc12_dilution.csv",
+        "mc12_dilution.pdf",
+        "mc12_layout.csv",
+        "mc12_plates.xlsx",
+        "mc12_platemap.pdf",
+        "mc12_bca_analysis.ipynb",
+        "mc12_protocol.md",
+        "mc12_protocol.pdf",
+    ]
+    for name in expected:
+        assert (outdir / name).exists(), name
+
+    out = capsys.readouterr().out
+    assert "assay_plates=2" in out
+
+
 def test_layout_avoid_edges_and_multichannel_errors(tmp_path, capsys):
     samples_path = _write_samples(tmp_path, n=2)
     outdir = tmp_path / "out"

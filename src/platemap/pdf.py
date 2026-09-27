@@ -27,14 +27,19 @@ HEADER_H = 0.6 * inch
 GUTTER = 0.35 * inch
 
 
-def _panel_rects() -> list[tuple[float, float, float, float]]:
-    """Return (x, y, w, h) for the four plate panels on a page, top-left origin logic."""
+def _panel_rects(n_plates: int = 4) -> list[tuple[float, float, float, float]]:
+    """Return (x, y, w, h) plate panels for a page, top-left origin logic.
+
+    Up to 4 plates use a 2x2 grid; with 2 or fewer, each panel gets the full
+    page height so long legends keep a readable font.
+    """
     usable_w = PAGE_W - 2 * MARGIN - GUTTER
     usable_h = PAGE_H - 2 * MARGIN - HEADER_H
+    n_rows = 1 if n_plates <= 2 else 2
     panel_w = usable_w / 2
-    panel_h = usable_h / 2
+    panel_h = usable_h / n_rows
     rects = []
-    for row in range(2):
+    for row in range(n_rows):
         for col in range(2):
             x = MARGIN + col * (panel_w + GUTTER)
             y = PAGE_H - MARGIN - HEADER_H - (row + 1) * panel_h
@@ -221,7 +226,7 @@ def write_pdf(
 
         _draw_header(c, experiment, date)
 
-        rects = _panel_rects()
+        rects = _panel_rects(len(page_plates))
         for plate, rect in zip(page_plates, rects):
             plate_rows = [r for r in rows if r.plate == plate]
             _draw_plate(c, rect, plate, plate_rows, transfer_lines.get(plate))
@@ -326,15 +331,17 @@ def _draw_standards_table(
 
 def _draw_transfer_table(
     c: canvas.Canvas,
-    transfers: list[tuple[int, int, int, tuple[int, ...], str]],
+    transfers: list[tuple[int, int, object, tuple, str]],
     x: float,
     top: float,
     w: float,
     font_size: float = 5.5,
+    channels: int = 8,
 ) -> float:
-    """Draw a (assay plate, dilution column -> assay columns, contents) transfer table."""
+    """Draw a (assay plate, dilution col/row -> assay cols/rows, contents) transfer table."""
     line_h = font_size + 1.6
-    headers = ("Assay plate", "Dil col", "-> Assay cols", "Contents")
+    unit = "row" if channels == 12 else "col"
+    headers = ("Assay plate", f"Dil {unit}", f"-> Assay {unit}s", "Contents")
     fracs = (0.14, 0.10, 0.20, 0.20)
     widths = [w * f for f in fracs]
 
@@ -346,9 +353,9 @@ def _draw_transfer_table(
 
     c.setFont("Helvetica", font_size)
     y = top - line_h
-    for assay_plate, _dplate, dcol, acols, contents in transfers:
-        acol_str = ",".join(str(a) for a in acols)
-        values = (f"Plate {assay_plate}", str(dcol), acol_str, contents)
+    for assay_plate, _dplate, dindex, aindices, contents in transfers:
+        aindex_str = ",".join(str(a) for a in aindices)
+        values = (f"Plate {assay_plate}", str(dindex), aindex_str, contents)
         hx = x
         for val, cw in zip(values, widths):
             c.drawString(hx, y, val)
@@ -356,6 +363,10 @@ def _draw_transfer_table(
         y -= line_h
 
     return (len(transfers) + 1) * line_h
+
+
+def _replicate_word(replicates: int) -> str:
+    return {2: "duplicate", 3: "triplicate"}.get(replicates, f"{replicates}-fold")
 
 
 def write_dilution_pdf(
@@ -366,6 +377,8 @@ def write_dilution_pdf(
     experiment: str = "",
     date: str = "",
     multichannel: bool = False,
+    channels: int = 8,
+    replicates: int = 3,
     n_samples: int = 0,
 ) -> int:
     """Write a dilution-plate protocol + map PDF, one plate per page, and return the page count."""
@@ -375,7 +388,8 @@ def write_dilution_pdf(
     n_pages = len(plates)
     content_w = PAGE_W - 2 * MARGIN
 
-    all_transfers = transfer_map(n_samples) if multichannel else []
+    all_transfers = transfer_map(n_samples, channels=channels, replicates=replicates) if multichannel else []
+    rep_word = _replicate_word(replicates)
 
     c = canvas.Canvas(path, pagesize=letter)
     for plate in plates:
@@ -402,22 +416,48 @@ def write_dilution_pdf(
         warnings: list[str] = []
         if multichannel:
             plate_transfers = [t for t in all_transfers if t[1] == plate and t[4].startswith("S")]
+            pipette_word = f"{channels}-channel"
+            transfer_word = "row-to-row" if channels == 12 else "column-to-column"
+            lane_word = "row" if channels == 12 else "column"
+            lane_n = 12 if channels == 12 else 8
             if standard_wells:
                 warnings = standard_prep_warnings(n_assay_plates)
                 stock_concs = [c for c in STANDARD_PREP_ORDER if STANDARD_PREP[c][0] == STOCK]
                 serial_concs = [c for c in STANDARD_PREP_ORDER if c not in stock_concs]
                 stock_list = ", ".join(str(c) for c in stock_concs)
                 serial_list = ", ".join(str(c) for c in serial_concs)
-                steps = [
-                    f'1) Label a clear 96-well plate "Dilution {plate}" (also the standard-prep plate).',
-                    (
+                if channels == 12:
+                    step2 = (
+                        f"2) Add diluent to sample rows C-H ({diluent_ul:g} µL/well) and 200 µL "
+                        "diluent to blank wells A9-A12 and B9-B12; standard volumes vary, see "
+                        "the table below."
+                    )
+                    step3_mid = "same row, same-column"
+                    step7 = (
+                        f"7) Transfer 25 µL {transfer_word} with a {pipette_word} pipette: dilution "
+                        "row A -> assay row A, row B -> assay row B (every assay plate); each "
+                        f"12-sample dilution row -> its {rep_word} assay rows, see the "
+                        "transfer table below."
+                    )
+                else:
+                    step2 = (
                         f"2) Add diluent to sample columns 4-12 ({diluent_ul:g} µL/well) and "
                         "200 µL diluent to blank column 3 (A3-H3); standard volumes vary, see "
                         "the table below."
-                    ),
+                    )
+                    step3_mid = "same column, same-row"
+                    step7 = (
+                        f"7) Transfer 25 µL {transfer_word} with a {pipette_word} pipette: dilution "
+                        "col 1 -> assay col 1, col 2 -> col 2, col 3 -> col 3 (every assay plate); "
+                        f"each 8-sample dilution column -> its {rep_word} assay columns, see the "
+                        "transfer table below."
+                    )
+                steps = [
+                    f'1) Label a clear 96-well plate "Dilution {plate}" (also the standard-prep plate).',
+                    step2,
                     (
                         f"3) Make the standards in this order: {stock_list} µg/mL from BSA stock; "
-                        f"then {serial_list} µg/mL serially, each from the same column, same-row "
+                        f"then {serial_list} µg/mL serially, each from the {step3_mid} "
                         "well of the previous concentration (see table for source wells/volumes). "
                         "Mix each source well 10x before drawing from it."
                     ),
@@ -427,12 +467,7 @@ def write_dilution_pdf(
                     ),
                     "5) Mix all wells by pipetting up and down 10x; avoid bubbles.",
                     "6) Seal or cover and spin briefly.",
-                    (
-                        "7) Transfer 25 µL column-to-column with an 8-channel pipette: dilution "
-                        "col 1 -> assay col 1, col 2 -> col 2, col 3 -> col 3 (every assay plate); "
-                        "each 8-sample dilution column -> its triplicate assay columns, see the "
-                        "transfer table below."
-                    ),
+                    step7,
                     (
                         f"8) Results are multiplied by the factor (x {factor:g}) automatically; "
                         "standards are NOT multiplied - they are already at final concentration."
@@ -452,9 +487,9 @@ def write_dilution_pdf(
                     f"4) Mix by pipetting up and down 10x at ~{0.6 * final_ul:g} µL; avoid bubbles.",
                     "5) Seal or cover and spin briefly.",
                     (
-                        "6) Transfer 25 µL column-to-column with an 8-channel pipette: each "
-                        "8-sample dilution column -> its triplicate assay columns, see the "
-                        "transfer table below."
+                        f"6) Transfer 25 µL {transfer_word} with a {pipette_word} pipette: each "
+                        f"{lane_n}-sample dilution {lane_word} -> its {rep_word} assay {lane_word}s, "
+                        "see the transfer table below."
                     ),
                     f"7) Results are reported for the undiluted sample (x {factor:g}) automatically.",
                 ]
@@ -489,7 +524,7 @@ def write_dilution_pdf(
                     "7) Transfer 25 µL to the assay plates: standards A1–A12 and B1–B6 map 1:1 "
                     "onto the same wells of every assay plate (multichannel OK). Do NOT "
                     "multichannel B7–B12: samples go dilution well S# → assay map S# "
-                    "(triplicate, 3 wells each)."
+                    f"({rep_word}, {replicates} wells each)."
                 ),
                 (
                     f"8) Results are multiplied by the factor (× {factor:g}) automatically; "
@@ -511,7 +546,7 @@ def write_dilution_pdf(
                 f"4) Mix by pipetting up and down 10× at ~{0.6 * final_ul:g} µL; avoid bubbles.",
                 "5) Seal or cover and spin briefly.",
                 (
-                    "6) Transfer 25 µL of each diluted sample in triplicate to the BCA assay "
+                    f"6) Transfer 25 µL of each diluted sample in {rep_word} to the BCA assay "
                     "plates; dilution well S# = assay map S#."
                 ),
                 f"7) Results are reported for the undiluted sample (× {factor:g}) automatically.",
@@ -561,7 +596,8 @@ def write_dilution_pdf(
                     key=lambda r: (int(r.well[1:]), r.well[0]),
                 )
                 blank_rows = sorted(
-                    (r for r in standard_wells if r.role == "blank"), key=lambda r: r.well
+                    (r for r in standard_wells if r.role == "blank"),
+                    key=lambda r: (r.well[0], int(r.well[1:])),
                 )
                 half_w = content_w * 0.5
                 h1 = _draw_standards_table(c, std_rows, MARGIN, cursor, half_w, font_size=5.0)
@@ -575,7 +611,9 @@ def write_dilution_pdf(
             cursor -= table_h + 6
 
         if multichannel and plate_transfers:
-            transfer_h = _draw_transfer_table(c, plate_transfers, MARGIN, cursor, content_w)
+            transfer_h = _draw_transfer_table(
+                c, plate_transfers, MARGIN, cursor, content_w, channels=channels
+            )
             cursor -= transfer_h + 6
 
         available_h = cursor - MARGIN

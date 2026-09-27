@@ -15,6 +15,18 @@ STANDARD_CONCS_MC = (2000, 1500, 1000, 750, 500, 250, 125, 25)
 
 MULTICHANNEL_CAPACITY = 24
 
+# Number of dilution-side sample "lanes" per assay plate for each channel mode:
+# 8-channel has 9 sample columns (4-12) on dilution plate 1; 12-channel has 6
+# sample rows (C-H) on dilution plate 1. Grouped into `replicates`-wide bundles.
+_LANES_8CH = 9
+_LANES_12CH = 6
+
+
+def _mc_capacity(channels: int, replicates: int) -> int:
+    lanes = _LANES_8CH if channels == 8 else _LANES_12CH
+    n_per_lane = 8 if channels == 8 else 12
+    return (lanes // replicates) * n_per_lane
+
 ROLE_FILL = {
     "standard": "FFC000",
     "blank": "A6A6A6",
@@ -69,12 +81,24 @@ def _try_place(n_wells: int, row_len: int, idx: int, size: int) -> int | None:
         idx = row_end
 
 
-def capacity(avoid_edges: bool = False, multichannel: bool = False) -> int:
-    """Max number of samples (in groups of 3) that fit on one plate after standards."""
-    if multichannel:
+def capacity(
+    avoid_edges: bool = False,
+    multichannel: bool = False,
+    channels: int | None = None,
+    replicates: int = 3,
+) -> int:
+    """Max number of samples that fit on one plate after standards.
+
+    Row-wise mode places samples in groups of `replicates` wells. Multichannel
+    modes (channels=8 or 12) place samples in `replicates`-wide bundles of
+    dilution-plate lanes (columns for 8-channel, rows for 12-channel).
+    """
+    if channels is None and multichannel:
+        channels = 8
+    if channels is not None:
         if avoid_edges:
             raise PlatemapError("--avoid-edges is not supported with --multichannel")
-        return MULTICHANNEL_CAPACITY
+        return _mc_capacity(channels, replicates)
 
     wells = usable_wells(avoid_edges)
     row_len = _row_len(avoid_edges)
@@ -89,26 +113,33 @@ def capacity(avoid_edges: bool = False, multichannel: bool = False) -> int:
 
     count = 0
     while True:
-        start = _try_place(n_wells, row_len, idx, 3)
+        start = _try_place(n_wells, row_len, idx, replicates)
         if start is None:
             break
-        idx = start + 3
+        idx = start + replicates
         count += 1
     return count
 
 
-def n_plates(n: int, avoid_edges: bool = False, multichannel: bool = False) -> int:
+def n_plates(
+    n: int,
+    avoid_edges: bool = False,
+    multichannel: bool = False,
+    channels: int | None = None,
+    replicates: int = 3,
+) -> int:
     """Number of plates needed to hold n samples."""
     if n <= 0:
         return 0
-    cap = capacity(avoid_edges, multichannel)
+    cap = capacity(avoid_edges, multichannel, channels, replicates)
     return math.ceil(n / cap)
 
 
-def _build_layout_multichannel(samples: list[Sample]) -> list[LayoutRow]:
+def _build_layout_multichannel(samples: list[Sample], replicates: int = 3) -> list[LayoutRow]:
     """Place standards (cols 1-2), blank (col 3), and samples (cols 4-12, 8-channel) per plate."""
     n = len(samples)
-    n_plates_needed = math.ceil(n / MULTICHANNEL_CAPACITY) if n > 0 else 0
+    cap = _mc_capacity(8, replicates)
+    n_plates_needed = math.ceil(n / cap) if n > 0 else 0
 
     rows_out: list[LayoutRow] = []
     for plate in range(1, n_plates_needed + 1):
@@ -152,14 +183,14 @@ def _build_layout_multichannel(samples: list[Sample]) -> list[LayoutRow]:
                 )
             )
 
-        start = (plate - 1) * MULTICHANNEL_CAPACITY
-        end = min(start + MULTICHANNEL_CAPACITY, n)
+        start = (plate - 1) * cap
+        end = min(start + cap, n)
         for k in range(start, end):
             idx_in_plate = k - start
             block = idx_in_plate // 8
             row_idx = idx_in_plate % 8
             row_letter = ROWS_FULL[row_idx]
-            cols = (4 + 3 * block, 5 + 3 * block, 6 + 3 * block)
+            cols = tuple(4 + replicates * block + c for c in range(replicates))
             samp = samples[k]
             global_index = k + 1
             for rep, col in enumerate(cols, start=1):
@@ -184,14 +215,119 @@ def _build_layout_multichannel(samples: list[Sample]) -> list[LayoutRow]:
     return rows_out
 
 
+def _dilution_row_for_group(g: int) -> tuple[int, str]:
+    """Return (dilution_plate, dilution_row) for global 12-sample row group g (0-based)."""
+    if g < 6:
+        return 1, ROWS_FULL[2 + g]
+    g2 = g - 6
+    return 2 + g2 // 8, ROWS_FULL[g2 % 8]
+
+
+def _build_layout_12ch(samples: list[Sample], replicates: int = 3) -> list[LayoutRow]:
+    """Place standards (rows A/B), blanks (A9-A12/B9-B12), and samples (rows C-H) per plate.
+
+    Every dilution sample row (12 distinct samples, one per column) is dispensed
+    into `replicates` consecutive assay rows, same columns (12-channel pipette).
+    """
+    n = len(samples)
+    n_dil_rows = math.ceil(n / 12) if n > 0 else 0
+    groups_per_plate = 6 // replicates
+    cap = groups_per_plate * 12
+    n_plates_needed = math.ceil(n / cap) if n > 0 else 0
+
+    rows_out: list[LayoutRow] = []
+    for plate in range(1, n_plates_needed + 1):
+        for col_idx, conc in enumerate(STANDARD_CONCS_MC):
+            col = col_idx + 1
+            for rep, row_letter in ((1, "A"), (2, "B")):
+                well = f"{row_letter}{col}"
+                rows_out.append(
+                    LayoutRow(
+                        plate=plate,
+                        well=well,
+                        row=row_letter,
+                        col=col,
+                        role="standard",
+                        short_id=f"STD{conc}",
+                        label=f"BSA {conc} µg/mL",
+                        conc_ugml=float(conc),
+                        sample_name=None,
+                        dilution_factor=None,
+                        replicate=rep,
+                        notes="",
+                    )
+                )
+
+        blank_wells = [(r, c) for r in ("A", "B") for c in (9, 10, 11, 12)]
+        for i, (row_letter, col) in enumerate(blank_wells, start=1):
+            well = f"{row_letter}{col}"
+            rows_out.append(
+                LayoutRow(
+                    plate=plate,
+                    well=well,
+                    row=row_letter,
+                    col=col,
+                    role="blank",
+                    short_id="BLK",
+                    label="Blank",
+                    conc_ugml=0.0,
+                    sample_name=None,
+                    dilution_factor=None,
+                    replicate=i,
+                    notes="",
+                )
+            )
+
+        for slot in range(groups_per_plate):
+            g = groups_per_plate * (plate - 1) + slot
+            if g >= n_dil_rows:
+                break
+            start_row_idx = 2 + slot * replicates
+            assay_rows = ROWS_FULL[start_row_idx : start_row_idx + replicates]
+            for col in range(1, 13):
+                index0 = g * 12 + (col - 1)
+                if index0 >= n:
+                    break
+                samp = samples[index0]
+                global_index = index0 + 1
+                for rep, row_letter in enumerate(assay_rows, start=1):
+                    well = f"{row_letter}{col}"
+                    rows_out.append(
+                        LayoutRow(
+                            plate=plate,
+                            well=well,
+                            row=row_letter,
+                            col=col,
+                            role="sample",
+                            short_id=f"S{global_index}",
+                            label=samp.sample_name,
+                            conc_ugml=None,
+                            sample_name=samp.sample_name,
+                            dilution_factor=samp.dilution_factor,
+                            replicate=rep,
+                            notes=samp.notes,
+                        )
+                    )
+
+    return rows_out
+
+
 def build_layout(
-    samples: list[Sample], avoid_edges: bool = False, multichannel: bool = False
+    samples: list[Sample],
+    avoid_edges: bool = False,
+    multichannel: bool = False,
+    channels: int | None = None,
+    replicates: int = 3,
 ) -> list[LayoutRow]:
     """Place standards and samples onto plates using the generic row-wise placer."""
-    if multichannel:
+    if channels is None and multichannel:
+        channels = 8
+    if channels is not None:
         if avoid_edges:
             raise PlatemapError("--avoid-edges is not supported with --multichannel")
-        return _build_layout_multichannel(samples)
+        if channels == 12:
+            return _build_layout_12ch(samples, replicates)
+        return _build_layout_multichannel(samples, replicates)
 
     wells = usable_wells(avoid_edges)
     row_len = _row_len(avoid_edges)
@@ -236,7 +372,7 @@ def build_layout(
         placed_any = True
         while placed_any and group_idx < len(sample_groups):
             global_index, samp = sample_groups[group_idx]
-            size = 3
+            size = replicates
             start = _try_place(n_wells, row_len, idx, size)
             if start is None:
                 placed_any = False

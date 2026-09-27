@@ -285,6 +285,39 @@ def test_transfer_map_plate2_is_dil_cols_7_8_9():
         assert e[1] == 1  # all still on dilution plate 1
 
 
+def test_12ch_dilution_layout_60_samples():
+    samples = _samples(60)
+    plan = make_plan()
+    wells = build_dilution_layout(samples, plan, channels=12)
+    by_well = {w.well: w for w in wells}
+
+    assert by_well["A1"].role == "standard" and by_well["A1"].conc_ugml == 2000.0
+    assert by_well["A8"].conc_ugml == 25.0
+    for col in (9, 10, 11, 12):
+        assert by_well[f"A{col}"].role == "blank"
+        assert by_well[f"B{col}"].role == "blank"
+    assert by_well["B1"].role == "standard" and by_well["B1"].conc_ugml == 2000.0
+
+    assert by_well["C1"].short_id == "S1"
+    assert by_well["C12"].short_id == "S12"
+    assert by_well["D1"].short_id == "S13"
+
+    sample_wells = [w for w in wells if w.role == "sample"]
+    assert {w.plate for w in sample_wells} == {1}
+    assert len(sample_wells) == 60
+
+
+def test_12ch_transfer_map_plate2():
+    entries = transfer_map(60, channels=12, replicates=2)
+    plate2 = [e for e in entries if e[0] == 2]
+    standards = [e for e in plate2 if not e[4].startswith("S")]
+    samples = [e for e in plate2 if e[4].startswith("S")]
+
+    assert {e[2] for e in standards} == {"A", "B"}
+    assert (1, "F", ("C", "D")) in {(e[1], e[2], e[3]) for e in samples}
+    assert (1, "G", ("E", "F")) in {(e[1], e[2], e[3]) for e in samples}
+
+
 def test_write_dilution_pdf_with_low_remaining_warnings(tmp_path):
     # 105 samples -> 5 assay plates -> standard_prep_warnings(5) is non-empty.
     samples = _samples(105)

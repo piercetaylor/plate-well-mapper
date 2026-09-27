@@ -99,12 +99,17 @@ every assay plate (5 or more assay plates at the default volumes).
 
 ## Multichannel mode
 
-Pass `--multichannel` to `platemap layout` or `platemap dilute` for an
-8-channel, column-wise layout instead of the default row-wise one:
-standards in columns 1-2, blank in column 3, samples in columns 4-12,
-so every dilution-to-assay transfer is a whole-column 8-channel
-transfer (not compatible with `--avoid-edges`). See `docs/usage.md` for
-the full layout diagrams and the `transfer_map` used by the PDFs.
+Pass `--multichannel` (alias for `--channels 8`) or `--channels 12` to
+`platemap layout` or `platemap dilute` for a column-wise (8-channel) or
+row-wise (12-channel) layout instead of the default row-wise one:
+8-channel puts standards in columns 1-2, blank in column 3, samples in
+columns 4-12; 12-channel puts standards in rows A-B, blanks in the rest
+of rows A-B, samples in rows C-H — so every dilution-to-assay transfer
+is a whole-column or whole-row multichannel transfer (not compatible
+with `--avoid-edges`). `--replicates {2,3}` (default `3`) sets the
+sample replicate count in every mode, including row-wise. See
+`docs/usage.md` for the full layout diagrams and the `transfer_map`
+used by the PDFs.
 
 ## Auto-generated protocol
 

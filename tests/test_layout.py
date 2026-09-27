@@ -122,3 +122,78 @@ def test_multichannel_sample_placement_60_samples():
 
     plates = {r.plate for r in rows}
     assert plates == {1, 2, 3}
+
+
+def test_8ch_replicates2_capacity_is_32():
+    assert capacity(channels=8, replicates=2) == 32
+
+
+def test_row_wise_replicates2_capacity():
+    # standards: 9 groups x 2 wells = 18 wells; then groups of 2 samples fit per row.
+    cap = capacity(replicates=2)
+    assert cap == 39
+
+
+def test_12ch_capacity_and_n_plates():
+    assert capacity(channels=12, replicates=2) == 36
+    assert capacity(channels=12, replicates=3) == 24
+    assert n_plates(60, channels=12, replicates=2) == 2
+
+
+def test_12ch_avoid_edges_errors():
+    with pytest.raises(PlatemapError):
+        capacity(avoid_edges=True, channels=12)
+    with pytest.raises(PlatemapError):
+        build_layout(_samples(1), avoid_edges=True, channels=12)
+
+
+def test_12ch_replicates2_60_samples():
+    rows = build_layout(_samples(60), channels=12, replicates=2)
+    plates = sorted({r.plate for r in rows})
+    assert plates == [1, 2]
+
+    def _n_sample_wells(plate):
+        return len([r for r in rows if r.plate == plate and r.role == "sample"])
+
+    assert _n_sample_wells(1) == 72  # 36 samples x 2 wells
+    assert _n_sample_wells(2) == 48  # 24 samples x 2 wells
+
+    by = {(r.plate, r.well): r for r in rows}
+
+    # standards in both rows A and B on both plates
+    for plate in plates:
+        assert by[(plate, "A1")].role == "standard" and by[(plate, "A1")].conc_ugml == 2000.0
+        assert by[(plate, "A8")].conc_ugml == 25.0
+        assert by[(plate, "B1")].role == "standard" and by[(plate, "B1")].conc_ugml == 2000.0
+
+    # 8 blank wells per plate
+    for plate in plates:
+        n_blanks = len({r.well for r in rows if r.plate == plate and r.role == "blank"})
+        assert n_blanks == 8
+    assert by[(1, "A9")].role == "blank"
+    assert by[(1, "A12")].role == "blank"
+    assert by[(1, "B9")].role == "blank"
+    assert by[(1, "B12")].role == "blank"
+
+    # S1 at dil C1 and assay C1+D1 (dilution-side placement is dilution.py's job;
+    # here we check the assay layout replication).
+    assert by[(1, "C1")].short_id == "S1" and by[(1, "D1")].short_id == "S1"
+    assert by[(1, "C12")].short_id == "S12" and by[(1, "D12")].short_id == "S12"
+    assert by[(1, "E1")].short_id == "S13" and by[(1, "F1")].short_id == "S13"
+
+    # S37 on assay plate 2 at C1+D1 (from dil row F)
+    assert by[(2, "C1")].short_id == "S37" and by[(2, "D1")].short_id == "S37"
+
+    # S60 at plate 2 E12+F12
+    assert by[(2, "E12")].short_id == "S60" and by[(2, "F12")].short_id == "S60"
+
+    # plate 2 rows G-H empty
+    assert (2, "G1") not in by
+    assert (2, "H1") not in by
+
+    # each sample exactly 2 wells
+    from collections import Counter
+
+    sample_counts = Counter(r.short_id for r in rows if r.role == "sample")
+    assert all(c == 2 for c in sample_counts.values())
+    assert len(sample_counts) == 60
